@@ -1,4 +1,5 @@
 import os
+import json
 from ftplib import all_errors
 
 import numpy as np
@@ -260,7 +261,18 @@ def curve_lines_analysis(data_path,
         add_info_logging("Analysis completed", "work_logger")
 
 
-def basal_ring_analysis(data_path, result_path, folder_name, dict_cases):
+def _detect_plane_offset(distances, cv_threshold=0.20, min_mean_mm=0.5):
+    """True if all GT-to-curve distances are approximately equal, indicating
+    a systematic shift (e.g. wrong annotation plane).
+    Criterion: CV = std/mean < cv_threshold.
+    min_mean_mm guards against flagging near-perfect predictions."""
+    mean_d = float(np.mean(distances))
+    if mean_d < min_mean_mm:
+        return False
+    return float(np.std(distances)) / mean_d < cv_threshold
+
+
+def basal_ring_analysis(data_path, result_path, folder_name, dict_cases, detect_plane_offset=True):
     date_str = datetime.now().strftime("%d_%m_%y")
     result_folder_path = os.path.join(result_path, f"{folder_name}_{date_str}")
     os.makedirs(result_folder_path, exist_ok=True)
@@ -277,10 +289,13 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases):
         "n": "Slo. norm."
     }
 
-    if os.path.exists(per_case_csv):
-        add_info_logging("Using cached metrics from CSV files", "work_logger")
+    needs_recompute = not os.path.exists(per_case_csv)
+    if not needs_recompute:
         df = pd.read_csv(per_case_csv)
-    else:
+        if "plane_offset" not in df.columns:
+            needs_recompute = True
+
+    if needs_recompute:
         per_case_data = []
         files = list(Path(result_mask_folder).glob("*.nii.gz"))
 
@@ -302,27 +317,54 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases):
 
             gt_points = np.array(dict_cases[case_name]["BR - closed"])
 
-            # For each GT point find nearest predicted boundary point (curve2points approach)
             distances = [np.sqrt(np.sum((pred_boundary - p) ** 2, axis=1)).min() for p in gt_points]
             asd = float(np.mean(distances))
+            offset = _detect_plane_offset(distances) if detect_plane_offset else False
 
-            per_case_data.append({"case": case_name, "group": first_char, "ASD": round(asd, 3)})
+            per_case_data.append({
+                "case": case_name,
+                "group": first_char,
+                "ASD": round(asd, 3),
+                "plane_offset": offset
+            })
 
         df = pd.DataFrame(per_case_data)
         df.to_csv(per_case_csv, index=False)
+    else:
+        add_info_logging("Using cached metrics from CSV files", "work_logger")
 
-    for metric_name in ["ASD"]:
-        data_for_plot = df[['group', metric_name]].dropna(how='any')
-        plot_group_comparison('group', metric_name, group_label_map, data_for_plot,
-                              os.path.join(str(result_folder_path), "basal_ring_comparison"))
+    if not detect_plane_offset:
+        df["plane_offset"] = False
 
-    data_table = [
-        ["All", round(df["ASD"].mean(numeric_only=True), 2), int(len(df["group"]))],
-        ["German\npathology", round(df[df['group'] == "g"]["ASD"].mean(numeric_only=True), 2), int(len(df[df['group'] == "g"]))],
-        ["Slovenian\npathology", round(df[df['group'] == "p"]["ASD"].mean(numeric_only=True), 2), int(len(df[df['group'] == "p"]))],
-        ["Slovenian\nnormal", round(df[df['group'] == "n"]["ASD"].mean(numeric_only=True), 2), int(len(df[df['group'] == "n"]))],
+    df_valid = df[~df["plane_offset"]]
+
+    data_for_plot = df_valid[['group', 'ASD']].dropna(how='any')
+    plot_group_comparison('group', 'ASD', group_label_map, data_for_plot,
+                          os.path.join(str(result_folder_path), "basal_ring_comparison"))
+
+    def _group_stats(group_key):
+        sub = df if group_key is None else df[df['group'] == group_key]
+        total = len(sub)
+        if total == 0:
+            return float('nan'), 0, "0%"
+        sub_valid = sub[~sub["plane_offset"]]
+        asd_mean = round(float(sub_valid["ASD"].mean()), 2) if len(sub_valid) > 0 else float('nan')
+        offset_pct = f"{round(100 * sub['plane_offset'].sum() / total, 1)}%"
+        return asd_mean, total, offset_pct
+
+    groups = [
+        ("All", None),
+        ("German\npathology", "g"),
+        ("Slovenian\npathology", "p"),
+        ("Slovenian\nnormal", "n"),
     ]
-    columns = ["Type", "Average Surface\nDistance, mm", "Number of\nimages"]
+
+    data_table = []
+    for label, group_key in groups:
+        asd_mean, total, offset_pct = _group_stats(group_key)
+        data_table.append([label, asd_mean, total, offset_pct])
+
+    columns = ["Type", "ASD (excl. offset),\nmm", "Total\ncases", "Plane offset\ncases, %"]
     plot_table(data_table, columns, os.path.join(result_folder_path, f"br_errors_{folder_name}.png"))
     add_info_logging("Basal ring analysis completed", "work_logger")
 
@@ -457,12 +499,17 @@ def landmarks_analysis(data_path, dict_all_case,
     }
 
     results = []  # список словарей
+    predictions = {}  # {case_name: {"R_pred": [x,y,z], ...}}
+
+    predictions_json_path = result_folder_path / f"landmark_predictions_{ds_folder_name}.json"
 
     if find_center_mass:
-        if os.path.exists(results_csv_path):
+        if os.path.exists(results_csv_path) and os.path.exists(predictions_json_path):
             # Загружаем данные из файлов
             add_info_logging("Using cached metrics from CSV files", "work_logger")
             results_df = pd.read_csv(results_csv_path)
+            with open(predictions_json_path, "r") as f:
+                predictions = json.load(f)
         else:
             ext = "*.npz" if probabilities_map else "*.nii.gz"
             files = list(result_landmarks_folder.glob(ext))
@@ -482,9 +529,17 @@ def landmarks_analysis(data_path, dict_all_case,
 
                 results = _compute_errors(dict_all_case[file_name], landmarks_pred, results, file_name)
 
+                predictions[file_name] = {
+                    point_name[num_key].upper() + "_pred": landmarks_pred[num_key].tolist()
+                    for num_key in point_name
+                    if num_key != "all" and num_key in landmarks_pred
+                }
+
             # Сохраняем подробный CSV
             results_df = pd.DataFrame(results)
             results_df.to_csv(results_csv_path, index=False)
+            with open(predictions_json_path, "w") as f:
+                json.dump(predictions, f, indent=2)
             # add_info_logging("finish analysis", "work_logger")
 
         mean_error = results_df["error"].mean(numeric_only=True)
@@ -561,6 +616,8 @@ def landmarks_analysis(data_path, dict_all_case,
                 data_for_plot = results_df[results_df['group'] == key][["point_id", "error"]].dropna(how='any')
                 plot_group_comparison("point_id","error", point_name_dict, data_for_plot,
                                       str(graph_folder), type_name)
+
+        return predictions
 
     if find_monte_carlo:
         arr_mean_angles_ger_pat = np.array([]).reshape(0, 3)

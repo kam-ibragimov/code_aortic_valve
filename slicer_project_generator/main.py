@@ -10,7 +10,7 @@ def main(data_path):
     original_aorta_mask_folder = os.path.join(data_path, "mask_aorta_segment")
     gh_lines_pred_mask_folder = os.path.join(data_path, "nnUNet_folder", "nnUNet_test", "Dataset424_GhLines")
     ci_lines_pred_mask_folder = os.path.join(data_path, "nnUNet_folder", "nnUNet_test", "Dataset425_CiLines")
-    br_2d_pred_mask_folder = os.path.join(data_path, "nnUNet_folder", "nnUNet_test", "Dataset426_BasalRing2d")
+    br_2d_pred_mask_folder = os.path.join(data_path, "nnUNet_folder", "nnUNet_test", "Dataset426_2DBasalRing")
     dict_all_case = json_reader(dict_all_case_path)
     # get a list of cases
     cases = list(dict_all_case.keys())

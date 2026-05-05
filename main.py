@@ -27,9 +27,18 @@ from data_visualization.markers import (slices_with_markers, process_markers, fi
 from models.controller_nnUnet import process_nnunet
 from experiments.nnUnet_experiments import experiment_training
 from models.controller_GNN import process_gnn
-from data_preprocessing.oblique_slice_extractor import find_global_2d_size, extract_2d_slice_pair
+from data_preprocessing.oblique_slice_extractor import find_global_2d_size, extract_2d_slice_pair, compute_br_plane_offset
 
 # from optimization.parallelization import division_processes
+
+
+def _cleanup_empty_logs(log_folder):
+    log_dir = Path(log_folder)
+    if not log_dir.exists():
+        return
+    for log_file in log_dir.iterdir():
+        if log_file.is_file() and log_file.stat().st_size == 0:
+            log_file.unlink()
 
 
 def controller(data_path, cpus):
@@ -345,16 +354,47 @@ def controller(data_path, cpus):
                 add_info_logging(f"Skipping {case_name}: 3D file not found.", "work_logger")
                 continue
 
+            r, l, n = points_dict['R'][0], points_dict['L'][0], points_dict['N'][0]
+
             extract_2d_slice_pair(
                 image_3d_path=image_3d_path,
                 mask_3d_path=mask_3d_path,
                 image_2d_path=os.path.join(image_br_2d_folder, f"{case_name}.nii.gz"),
                 mask_2d_path=os.path.join(mask_br_2d_folder, f"{case_name}.nii.gz"),
-                r=points_dict['R'][0], l=points_dict['L'][0], n=points_dict['N'][0],
+                r=r, l=l, n=n,
                 size_hw=global_2d_size
             )
 
+        json_save(dict_all_case, dict_all_case_path)
         controller_dump["extract_2d_slices"] = True
+        yaml_save(controller_dump, controller_path)
+
+    if not controller_dump.get("br_plane_offset"):
+        offset_rows = []
+        for case_name, points_dict in dict_all_case.items():
+            if "BR - closed" not in points_dict:
+                continue
+            r, l, n = points_dict['R'][0], points_dict['L'][0], points_dict['N'][0]
+            offset = compute_br_plane_offset(points_dict["BR - closed"], r=r, l=l, n=n)
+            dict_all_case[case_name]["BR - plane offset"] = offset
+            offset_rows.append({"case": case_name, "BR - plane offset": offset})
+
+        csv_path = os.path.join(result_folder, "br_plane_offset.csv")
+        if os.path.exists(csv_path):
+            os.remove(csv_path)
+        pd.DataFrame(offset_rows).to_csv(csv_path, index=False)
+
+        total = len(offset_rows)
+        shifted = sum(1 for row in offset_rows if row["BR - plane offset"] != 0.0)
+        if total > 0:
+            add_info_logging(
+                f"BR plane offset: {shifted}/{total} cases with non-zero offset "
+                f"({round(100 * shifted / total, 1)}%)",
+                "result_logger"
+            )
+
+        json_save(dict_all_case, dict_all_case_path)
+        controller_dump["br_plane_offset"] = True
         yaml_save(controller_dump, controller_path)
 
     if not controller_dump.get("nnUNet_br_2d_train"):
@@ -377,6 +417,50 @@ def controller(data_path, cpus):
         name = controller_dump["name_br_2d"]
         basal_ring_analysis(data_path, result_folder, folder_name=f"Dataset{num}_{name}", dict_cases=dict_all_case)
         controller_dump["analys_result_br_2d"] = True
+        yaml_save(controller_dump, controller_path)
+
+    if not controller_dump.get("nnUNet_br_2d_pred_plane"):
+        num = controller_dump["number_br_2d"]
+        name = controller_dump["name_br_2d"]
+        ds_folder_name = f"Dataset{num}_{name}"
+
+        images_ts_path = Path(nnUNet_folder) / "nnUNet_raw" / ds_folder_name / "imagesTs"
+        images_ts_true_path = Path(nnUNet_folder) / "nnUNet_raw" / ds_folder_name / "imagesTs_true_plane"
+
+        if images_ts_path.exists() and not images_ts_true_path.exists():
+            images_ts_path.rename(images_ts_true_path)
+        images_ts_path.mkdir(exist_ok=True)
+
+        global_2d_size = controller_dump["crop_br_2d_size"]
+        test_cases = train_test_lists[train_test_lists['type_series'] == 'test']['used_case_name'].tolist()
+
+        for case_name in test_cases:
+            points_dict = dict_all_case.get(case_name, {})
+            if not all(k in points_dict for k in ('R_pred', 'L_pred', 'N_pred')):
+                add_info_logging(f"Skipping {case_name}: predicted landmarks not found.", "work_logger")
+                continue
+            image_3d_path = os.path.join(image_crop_folder, f"{case_name}.nii.gz")
+            if not os.path.isfile(image_3d_path):
+                add_info_logging(f"Skipping {case_name}: 3D image not found.", "work_logger")
+                continue
+            extract_2d_slice_pair(
+                image_3d_path=image_3d_path,
+                image_2d_path=str(images_ts_path / f"{case_name}_0000.nii.gz"),
+                r=points_dict['R_pred'],
+                l=points_dict['L_pred'],
+                n=points_dict['N_pred'],
+                size_hw=global_2d_size
+            )
+
+        process_nnunet(folder=nnUNet_folder, ds_folder_name=ds_folder_name, id_case=num,
+                       folder_image_path=image_br_2d_folder, folder_mask_path=mask_br_2d_folder,
+                       dict_dataset={"channel_names": {0: "CT"},
+                                     "labels": {'background': 0, 'aortic_valve': 1},
+                                     "file_ending": ".nii.gz"},
+                       train_test_lists=train_test_lists,
+                       create_ds=False, training_mod=False, predicting_mod=True, network="2d")
+
+        controller_dump["nnUNet_br_2d_pred_plane"] = True
         yaml_save(controller_dump, controller_path)
 
     if not controller_dump.get("mask_6_landmarks"):
@@ -645,8 +729,13 @@ def controller(data_path, cpus):
     if not controller_dump.get("analys_result_6_landmarks"):
         num = controller_dump["number_6_landmarks"]
         name = controller_dump["name_6_landmarks"]
-        landmarks_analysis(Path(data_path), dict_all_case, ds_folder_name=f"Dataset{num}_{name}",
-                           find_center_mass=True, probabilities_map=True)
+        predictions = landmarks_analysis(Path(data_path), dict_all_case, ds_folder_name=f"Dataset{num}_{name}",
+                                         find_center_mass=True, probabilities_map=True)
+        if predictions:
+            for case_name, pred_coords in predictions.items():
+                if case_name in dict_all_case:
+                    dict_all_case[case_name].update(pred_coords)
+            json_save(dict_all_case, dict_all_case_path)
         controller_dump["analys_result_6_landmarks"] = True
         yaml_save(controller_dump, controller_path)
 
@@ -714,6 +803,7 @@ if __name__ == "__main__":
     # create_directory_structure(data_path, json_reader(data_structure_path))
 
     if data_path:
+        _cleanup_empty_logs(os.path.join(data_path, "result/log"))
         free_cpus = get_free_cpus()
         current_time = datetime.now()
 

@@ -205,6 +205,7 @@ class ProjectGenerator:
             boundary_points = boundary_points[:-1]
         # endpoint=False: equal spacing without repeating start point at closure
         indices = np.round(np.linspace(0, len(boundary_points), n_samples, endpoint=False)).astype(int)
+        indices = np.clip(indices, 0, len(boundary_points) - 1)
         return {'BR_p': boundary_points[indices]}
 
     def check_and_prepare_folder(self, case_folder_path):
@@ -259,6 +260,10 @@ class ProjectGenerator:
                         new_json = fill_template(self.case_data, template, key, label_prefix)
                     elif key in self.gh_pred_data:
                         new_json = fill_template(self.gh_pred_data, template, key, label_prefix)
+                    elif self.gh_pred_data and "_pred" in filename:
+                        # pred MRML template will be used and references this file;
+                        # save empty template so Slicer doesn't error on missing file
+                        new_json = template
                     else:
                         continue
                 elif filename == 'RefPoints.json':

@@ -159,9 +159,7 @@ def extract_centerline_from_heatmap(
 def extract_boundary_curve_world(mask_array, mask_sitk):
     """
     Extracts a face-connected closed boundary contour from an oblique 2D mask
-    stored as a single-slice nii.gz (shape: 1 x H x W).
-    find_contours traces edges between pixels — each contour point is face-adjacent
-    to its neighbors, no diagonal connections.
+    stored as a single-slice 3D nii.gz (one dimension == 1, any axis).
     Returns np.ndarray of shape (N, 3) in world coordinates (mm).
     """
     from skimage.measure import find_contours
@@ -170,20 +168,29 @@ def extract_boundary_curve_world(mask_array, mask_sitk):
     spacing = np.array(mask_sitk.GetSpacing())
     direction = np.array(mask_sitk.GetDirection()).reshape(3, 3)
 
-    slice_2d = (mask_array[0] > 0).astype(np.uint8)  # single oblique slice
+    # numpy axes are (Z, Y, X) in ITK terms: numpy axis k → ITK axis (2-k)
+    # Find which numpy axis has size 1 (the plane normal axis)
+    thin_numpy = int(np.argmin(mask_array.shape))
+    plane_numpy = [i for i in range(3) if i != thin_numpy]
+
+    slice_2d = (np.squeeze(mask_array, axis=thin_numpy) > 0).astype(np.uint8)
     contours = find_contours(slice_2d, level=0.5)
     if not contours:
         return np.empty((0, 3))
 
-    # longest contour = outer boundary of the mask region
     contour = max(contours, key=len)
+    coords = np.array(contour)  # (N, 2): [row, col] in the 2D slice
 
-    # Vectorized conversion: (row=Y, col=X) → world coords
-    # idx_array shape (N,3): columns = (X=col, Y=row, Z=0)
-    coords = np.array(contour)  # (N, 2)
-    idx_array = np.column_stack([coords[:, 1], coords[:, 0], np.zeros(len(coords))])
-    world_points = (idx_array * spacing) @ direction.T + origin  # (N, 3)
+    # Map (row, col) back to 3D ITK pixel indices.
+    # After squeezing thin_numpy, the 2D axes are plane_numpy in ascending order:
+    #   2D axis 0 (row) → numpy axis plane_numpy[0] → ITK axis (2 - plane_numpy[0])
+    #   2D axis 1 (col) → numpy axis plane_numpy[1] → ITK axis (2 - plane_numpy[1])
+    idx_3d = np.zeros((len(coords), 3))
+    idx_3d[:, 2 - plane_numpy[0]] = coords[:, 0]  # row
+    idx_3d[:, 2 - plane_numpy[1]] = coords[:, 1]  # col
+    # thin ITK axis index stays 0
 
+    world_points = (idx_3d * spacing) @ direction.T + origin
     return world_points
 
 

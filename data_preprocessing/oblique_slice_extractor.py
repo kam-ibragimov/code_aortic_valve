@@ -133,11 +133,11 @@ def find_global_2d_size(mask_crop_folder, dict_all_case, initial_size=512, paddi
     return [H, W]
 
 
-def extract_2d_slice_pair(image_3d_path, mask_3d_path,
-                          image_2d_path, mask_2d_path,
-                          r, l, n, size_hw):
+def extract_2d_slice_pair(image_3d_path, image_2d_path,
+                          r, l, n, size_hw,
+                          mask_3d_path=None, mask_2d_path=None):
     """
-    Extracts oblique 2D slices for one case: CT image and aorta mask.
+    Extracts oblique 2D slices for one case: CT image and optionally aorta mask.
 
     Spacing is read from the CT image (image and mask share the same spacing).
     The plane is defined by nadir points R, L, N in world coordinates.
@@ -146,11 +146,11 @@ def extract_2d_slice_pair(image_3d_path, mask_3d_path,
 
     Parameters:
         image_3d_path : path to cropped 3D CT image
-        mask_3d_path  : path to cropped 3D aorta mask
         image_2d_path : output path for 2D CT slice
-        mask_2d_path  : output path for 2D mask slice
         r, l, n       : nadir points in world coordinates (each a list/array of 3 floats)
         size_hw       : [H, W] output size in pixels
+        mask_3d_path  : path to cropped 3D aorta mask (optional)
+        mask_2d_path  : output path for 2D mask slice (optional)
     """
     image = sitk.ReadImage(str(image_3d_path))
     spacing = image.GetSpacing()[0]  # isotropic
@@ -164,10 +164,41 @@ def extract_2d_slice_pair(image_3d_path, mask_3d_path,
     )
     sitk.WriteImage(ct_resampler.Execute(image), str(image_2d_path))
 
-    mask = sitk.ReadImage(str(mask_3d_path))
-    mask_resampler = _build_resampler(
-        centroid, x_axis, y_axis, normal,
-        spacing, size_hw, fill_value=0,
-        interpolator=sitk.sitkNearestNeighbor
-    )
-    sitk.WriteImage(mask_resampler.Execute(mask), str(mask_2d_path))
+    if mask_3d_path is not None and mask_2d_path is not None:
+        mask = sitk.ReadImage(str(mask_3d_path))
+        mask_resampler = _build_resampler(
+            centroid, x_axis, y_axis, normal,
+            spacing, size_hw, fill_value=0,
+            interpolator=sitk.sitkNearestNeighbor
+        )
+        sitk.WriteImage(mask_resampler.Execute(mask), str(mask_2d_path))
+
+
+def compute_br_plane_offset(br_points, r, l, n, t_threshold=2.5, min_offset_mm=0.3):
+    """
+    Computes the signed offset of 'BR - closed' points from the oblique plane R/L/N.
+
+    For each BR point computes signed distance: dot(point - centroid, normal).
+    Detection uses a t-statistic: |mean| / (std / sqrt(N)) > t_threshold.
+    This is robust to annotation noise regardless of the number of points.
+
+    t_threshold=2.5 corresponds roughly to p<0.02 for typical N (10-20 points).
+    min_offset_mm guards against flagging noise when std itself is very small.
+
+    Returns the mean signed offset (mm) when systematic, 0.0 otherwise.
+    """
+    centroid, _, _, normal = get_oblique_plane_params(r, l, n)
+    pts = np.array(br_points, dtype=float)
+    signed_dists = (pts - centroid) @ normal
+
+    n = len(signed_dists)
+    mean_d = float(np.mean(signed_dists))
+    std_d = float(np.std(signed_dists))
+
+    if std_d < 1e-6:
+        return round(mean_d, 3) if abs(mean_d) > min_offset_mm else 0.0
+
+    t_stat = abs(mean_d) / (std_d / np.sqrt(n))
+    if t_stat > t_threshold and abs(mean_d) > min_offset_mm:
+        return round(mean_d, 3)
+    return 0.0
