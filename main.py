@@ -415,7 +415,14 @@ def controller(data_path, cpus):
     if not controller_dump.get("analys_result_br_2d"):
         num = controller_dump["number_br_2d"]
         name = controller_dump["name_br_2d"]
-        basal_ring_analysis(data_path, result_folder, folder_name=f"Dataset{num}_{name}", dict_cases=dict_all_case)
+        predictions = basal_ring_analysis(data_path, result_folder, folder_name=f"Dataset{num}_{name}",
+                                          dict_cases=dict_all_case, plane_offset_mode="key",
+                                          n_curve_points=20)
+        if predictions:
+            for case_name, pred_coords in predictions.items():
+                if case_name in dict_all_case:
+                    dict_all_case[case_name].update(pred_coords)
+            json_save(dict_all_case, dict_all_case_path)
         controller_dump["analys_result_br_2d"] = True
         yaml_save(controller_dump, controller_path)
 
@@ -739,6 +746,29 @@ def controller(data_path, cpus):
         controller_dump["analys_result_6_landmarks"] = True
         yaml_save(controller_dump, controller_path)
 
+    if not controller_dump.get("analys_experiment_result_6_landmarks"):
+        num = controller_dump["number_6_landmarks"]
+        name = controller_dump["name_6_landmarks"]
+        exp_points = {"all": "All", 1: "r", 2: "l", 3: "n"}
+        cases_zero = {cn for cn, cd in dict_all_case.items() if cd.get("BR - plane offset", 0) == 0}
+        cases_nonzero = {cn for cn, cd in dict_all_case.items() if cd.get("BR - plane offset", 0) != 0}
+        landmarks_analysis(Path(data_path), dict_all_case,
+                           ds_folder_name=f"Dataset{num}_{name}",
+                           find_center_mass=True, probabilities_map=True,
+                           active_point_name=exp_points,
+                           case_subset=cases_zero,
+                           group_label="_zero_offset",
+                           result_folder_name=f"Exp_Dataset{num}_{name}")
+        landmarks_analysis(Path(data_path), dict_all_case,
+                           ds_folder_name=f"Dataset{num}_{name}",
+                           find_center_mass=True, probabilities_map=True,
+                           active_point_name=exp_points,
+                           case_subset=cases_nonzero,
+                           group_label="_nonzero_offset",
+                           result_folder_name=f"Exp_Dataset{num}_{name}")
+        controller_dump["analys_experiment_result_6_landmarks"] = True
+        yaml_save(controller_dump, controller_path)
+
     if not controller_dump.get("analys_result_gh_landmark"):
         num = controller_dump["number_gh_landmark"]
         name = controller_dump["name_gh_landmark"]
@@ -750,24 +780,36 @@ def controller(data_path, cpus):
     if not controller_dump.get("analys_result_gh_lines"):
         num = controller_dump["number_gh_lines"]
         name = controller_dump["name_gh_lines"]
-        curve_lines_analysis(data_path, result_folder, folder_name=f"Dataset{num}_{name}",
-                             dict_cases=dict_all_case, keys_to_need={1: 'RGH', 2: 'LGH', 3: 'NGH'},
-                             name_result_folder="geometric_height_comparison",
-                             spline_smoothing=0.5,
-                             probabilities_map=False, original_mask=True,
-                             points2points=False, curve2points=True)
+        predictions = curve_lines_analysis(data_path, result_folder, folder_name=f"Dataset{num}_{name}",
+                                           dict_cases=dict_all_case, keys_to_need={1: 'RGH', 2: 'LGH', 3: 'NGH'},
+                                           name_result_folder="geometric_height_comparison",
+                                           spline_smoothing=0.5,
+                                           probabilities_map=False, original_mask=True,
+                                           points2points=False, curve2points=True,
+                                           n_curve_points=20)
+        if predictions:
+            for case_name, pred_coords in predictions.items():
+                if case_name in dict_all_case:
+                    dict_all_case[case_name].update(pred_coords)
+            json_save(dict_all_case, dict_all_case_path)
         controller_dump["analys_result_gh_lines"] = True
         yaml_save(controller_dump, controller_path)
 
     if not controller_dump.get("analys_result_ci_lines"):
         num = controller_dump["number_ci_lines"]
         name = controller_dump["name_ci_lines"]
-        curve_lines_analysis(data_path, result_folder, folder_name=f"Dataset{num}_{name}",
-                             dict_cases=dict_all_case, keys_to_need = {1: 'RCI', 2: 'LCI', 3: 'NCI'},
-                             name_result_folder="cusp_insertion_comparison",
-                             spline_smoothing=0.1,
-                             probabilities_map=False, original_mask=True,
-                             points2points=False, curve2points=True)
+        predictions = curve_lines_analysis(data_path, result_folder, folder_name=f"Dataset{num}_{name}",
+                                           dict_cases=dict_all_case, keys_to_need={1: 'RCI', 2: 'LCI', 3: 'NCI'},
+                                           name_result_folder="cusp_insertion_comparison",
+                                           spline_smoothing=0.1,
+                                           probabilities_map=False, original_mask=True,
+                                           points2points=False, curve2points=True,
+                                           n_curve_points=20)
+        if predictions:
+            for case_name, pred_coords in predictions.items():
+                if case_name in dict_all_case:
+                    dict_all_case[case_name].update(pred_coords)
+            json_save(dict_all_case, dict_all_case_path)
         controller_dump["analys_result_ci_lines"] = True
         yaml_save(controller_dump, controller_path)
 

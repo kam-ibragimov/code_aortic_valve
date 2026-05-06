@@ -47,6 +47,18 @@ def load_labels_mask_sitk(file_path, label):
     return mask_sitk
 
 
+def _sample_curve_points(vtk_curve, n_points):
+    pts = np.array([[vtk_curve.GetPoints().GetPoint(i)[j] for j in range(3)]
+                    for i in range(vtk_curve.GetNumberOfPoints())])
+    if len(pts) < 2:
+        return None
+    diffs = np.diff(pts, axis=0)
+    cum_len = np.concatenate([[0], np.cumsum(np.linalg.norm(diffs, axis=1))])
+    target = np.linspace(0, cum_len[-1], n_points)
+    resampled = np.column_stack([np.interp(target, cum_len, pts[:, i]) for i in range(3)])
+    return resampled.tolist()
+
+
 def curve_lines_analysis(data_path,
                          result_path,
                          folder_name,
@@ -57,11 +69,13 @@ def curve_lines_analysis(data_path,
                          probabilities_map=True,
                          original_mask=False,
                          points2points=False,
-                         curve2points=False):
+                         curve2points=False,
+                         n_curve_points=None):
 
     date_str = datetime.now().strftime("%d_%m_%y")
     result_folder_path = os.path.join(result_path, f"{folder_name}_{date_str}")
     os.makedirs(result_folder_path, exist_ok=True)
+    predictions = {}
     nnUNet_folder = os.path.join(data_path, "nnUNet_folder")
     result_mask_folder = os.path.join(nnUNet_folder, "nnUNet_test", folder_name)
     original_mask_folder = os.path.join(nnUNet_folder, "original_mask", folder_name)
@@ -163,12 +177,20 @@ def curve_lines_analysis(data_path,
     if curve2points:
         per_case_c2p_csv = os.path.join(str(result_folder_path), "per_case_c2p_metrics.csv")
         not_found_csv = os.path.join(str(result_folder_path), "not_found_curves.csv")
+        predictions_json_path = os.path.join(str(result_folder_path), "curve_predictions.json") if n_curve_points else None
         metrics_name_2 = ["MPCD"]
 
-        if os.path.exists(per_case_c2p_csv):
+        use_cache = os.path.exists(per_case_c2p_csv) and (
+            n_curve_points is None or (predictions_json_path and os.path.exists(predictions_json_path))
+        )
+
+        if use_cache:
             add_info_logging("Using cached metrics from CSV files", "work_logger")
             df_2 = pd.read_csv(per_case_c2p_csv)
             df_nf = pd.read_csv(not_found_csv) if os.path.exists(not_found_csv) else pd.DataFrame()
+            if predictions_json_path and os.path.exists(predictions_json_path):
+                with open(predictions_json_path) as f:
+                    predictions = json.load(f)
         else:
             per_case_c2p_data = []
             not_found_data = []
@@ -204,6 +226,12 @@ def curve_lines_analysis(data_path,
                         continue
                     temp_metrics_2 = compute_metrics_gh_line_v2(dict_cases[case_name][keys_to_need[label]], vtk_curve_pred)
                     asd_metric.append(temp_metrics_2["MPCD"])
+                    if n_curve_points:
+                        sampled = _sample_curve_points(vtk_curve_pred, n_curve_points)
+                        if sampled is not None:
+                            if case_name not in predictions:
+                                predictions[case_name] = {}
+                            predictions[case_name][keys_to_need[label] + "_pred"] = sampled
                 metrics_2["case"] = case_name
                 metrics_2["group"] = first_char
                 asd_arr = np.array(asd_metric, dtype=float)
@@ -216,6 +244,10 @@ def curve_lines_analysis(data_path,
             df_nf = pd.DataFrame(not_found_data)
             if not df_nf.empty:
                 df_nf.to_csv(not_found_csv, index=False)
+
+            if predictions_json_path:
+                with open(predictions_json_path, "w") as f:
+                    json.dump(predictions, f, indent=2)
 
         for metric_name in metrics_name_2:
             data_for_plot = df_2[['group', metric_name]].dropna(how='any')
@@ -260,6 +292,25 @@ def curve_lines_analysis(data_path,
     if points2points or curve2points:
         add_info_logging("Analysis completed", "work_logger")
 
+    return predictions
+
+
+def _sample_closed_curve_uniform(points, n_points):
+    """Sample n_points equally spaced (by arc length) on a closed curve.
+    The wrap-around segment (last→first) is included so all N gaps are equal.
+    Returns list of [x, y, z] — first and last points are distinct.
+    """
+    pts = np.asarray(points, dtype=float)
+    pts_closed = np.vstack([pts, pts[0:1]])          # close the loop for arc-length calc
+    seg_lengths = np.linalg.norm(np.diff(pts_closed, axis=0), axis=1)
+    cum_len = np.concatenate([[0.0], np.cumsum(seg_lengths)])
+    total_length = cum_len[-1]
+    if total_length == 0 or len(pts) < 2:
+        return None
+    targets = np.arange(n_points) * (total_length / n_points)
+    resampled = np.column_stack([np.interp(targets, cum_len, pts_closed[:, i]) for i in range(3)])
+    return resampled.tolist()
+
 
 def _detect_plane_offset(distances, cv_threshold=0.20, min_mean_mm=0.5):
     """True if all GT-to-curve distances are approximately equal, indicating
@@ -272,7 +323,11 @@ def _detect_plane_offset(distances, cv_threshold=0.20, min_mean_mm=0.5):
     return float(np.std(distances)) / mean_d < cv_threshold
 
 
-def basal_ring_analysis(data_path, result_path, folder_name, dict_cases, detect_plane_offset=True):
+def basal_ring_analysis(data_path, result_path, folder_name, dict_cases,
+                        plane_offset_mode="none", n_curve_points=None):
+    # plane_offset_mode: "none"   — все смещения False
+    #                    "detect" — статистическое вычисление _detect_plane_offset
+    #                    "key"    — читать "BR - plane offset" из dict_cases
     date_str = datetime.now().strftime("%d_%m_%y")
     result_folder_path = os.path.join(result_path, f"{folder_name}_{date_str}")
     os.makedirs(result_folder_path, exist_ok=True)
@@ -281,6 +336,8 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases, detect_
     result_mask_folder = os.path.join(nnUNet_folder, "nnUNet_test", folder_name)
 
     per_case_csv = os.path.join(str(result_folder_path), "per_case_metrics_br.csv")
+    predictions_json_path = os.path.join(str(result_folder_path), "br_predictions.json") if n_curve_points else None
+    predictions = {}
 
     group_label_map = {
         "all": "All",
@@ -294,6 +351,8 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases, detect_
         df = pd.read_csv(per_case_csv)
         if "plane_offset" not in df.columns:
             needs_recompute = True
+    if not needs_recompute and predictions_json_path and not os.path.exists(predictions_json_path):
+        needs_recompute = True
 
     if needs_recompute:
         per_case_data = []
@@ -319,7 +378,12 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases, detect_
 
             distances = [np.sqrt(np.sum((pred_boundary - p) ** 2, axis=1)).min() for p in gt_points]
             asd = float(np.mean(distances))
-            offset = _detect_plane_offset(distances) if detect_plane_offset else False
+            if plane_offset_mode == "detect":
+                offset = _detect_plane_offset(distances)
+            elif plane_offset_mode == "key":
+                offset = dict_cases[case_name].get("BR - plane offset", 0.0) != 0.0
+            else:
+                offset = False
 
             per_case_data.append({
                 "case": case_name,
@@ -328,12 +392,27 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases, detect_
                 "plane_offset": offset
             })
 
+            if n_curve_points:
+                sampled = _sample_closed_curve_uniform(pred_boundary, n_curve_points)
+                if sampled is not None:
+                    predictions[case_name] = {"BR_pred": sampled}
+
         df = pd.DataFrame(per_case_data)
         df.to_csv(per_case_csv, index=False)
+        if predictions_json_path:
+            with open(predictions_json_path, "w") as f:
+                json.dump(predictions, f, indent=2)
     else:
         add_info_logging("Using cached metrics from CSV files", "work_logger")
+        if predictions_json_path and os.path.exists(predictions_json_path):
+            with open(predictions_json_path) as f:
+                predictions = json.load(f)
 
-    if not detect_plane_offset:
+    if plane_offset_mode == "key":
+        df["plane_offset"] = df["case"].map(
+            lambda c: dict_cases.get(c, {}).get("BR - plane offset", 0.0) != 0.0
+        )
+    elif plane_offset_mode == "none":
         df["plane_offset"] = False
 
     df_valid = df[~df["plane_offset"]]
@@ -344,13 +423,14 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases, detect_
 
     def _group_stats(group_key):
         sub = df if group_key is None else df[df['group'] == group_key]
-        total = len(sub)
-        if total == 0:
+        total_all = len(sub)
+        if total_all == 0:
             return float('nan'), 0, "0%"
         sub_valid = sub[~sub["plane_offset"]]
-        asd_mean = round(float(sub_valid["ASD"].mean()), 2) if len(sub_valid) > 0 else float('nan')
-        offset_pct = f"{round(100 * sub['plane_offset'].sum() / total, 1)}%"
-        return asd_mean, total, offset_pct
+        total_valid = len(sub_valid)
+        asd_mean = round(float(sub_valid["ASD"].mean()), 2) if total_valid > 0 else float('nan')
+        offset_pct = f"{round(100 * sub['plane_offset'].sum() / total_all, 1)}%"
+        return asd_mean, total_valid, offset_pct
 
     groups = [
         ("All", None),
@@ -364,9 +444,10 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases, detect_
         asd_mean, total, offset_pct = _group_stats(group_key)
         data_table.append([label, asd_mean, total, offset_pct])
 
-    columns = ["Type", "ASD (excl. offset),\nmm", "Total\ncases", "Plane offset\ncases, %"]
+    columns = ["Type", "ASD,\nmm", "Total\ncases", "Plane offset\ncases, %"]
     plot_table(data_table, columns, os.path.join(result_folder_path, f"br_errors_{folder_name}.png"))
     add_info_logging("Basal ring analysis completed", "work_logger")
+    return predictions
 
 
 def mask_analysis(data_path, result_path, type_mask, folder_name):
@@ -448,7 +529,11 @@ def landmarks_analysis(data_path, dict_all_case,
                        find_center_mass=False,
                        find_monte_carlo=False,
                        probabilities_map=False,
-                       type_set="six_landmarks"):
+                       type_set="six_landmarks",
+                       active_point_name=None,
+                       case_subset=None,
+                       group_label="",
+                       result_folder_name=None):
 
     def process_file(file, original_mask_folder, probabilities_map):
         res_test = LandmarkCentersCalculator()
@@ -483,7 +568,8 @@ def landmarks_analysis(data_path, dict_all_case,
     original_mask_folder = data_path / "nnUNet_folder" / "original_mask" / ds_folder_name
     json_path = data_path / "nnUNet_folder" / "json_info"
     date_str = datetime.now().strftime("%d_%m_%y")
-    result_folder_path = data_path / "result" / f"{ds_folder_name}_{date_str}"
+    _result_name = result_folder_name if result_folder_name is not None else ds_folder_name
+    result_folder_path = data_path / "result" / f"{_result_name}_{date_str}{group_label}"
     result_folder_path.mkdir(parents=True, exist_ok=True)
     results_csv_path = result_folder_path / f"landmark_errors_{ds_folder_name}.csv"
 
@@ -491,6 +577,8 @@ def landmarks_analysis(data_path, dict_all_case,
         point_name = {"all": "All", 1:"r", 2:"l", 3:"n", 4:"rlc", 5:"rnc", 6:"lnc"}
     elif type_set == "gh_landmark":
         point_name = {1: "gh"}
+    if active_point_name is not None:
+        point_name = active_point_name
     type_label = {
         "all": "All",
         "g": "Ger. path.",
@@ -515,17 +603,21 @@ def landmarks_analysis(data_path, dict_all_case,
             files = list(result_landmarks_folder.glob(ext))
 
             for file in files:
+                if file.name.endswith(".npz"):
+                    file_name = file.name[:-4]
+                elif file.name.endswith(".nii.gz"):
+                    file_name = file.name[:-7]
+                else:
+                    continue
+                if case_subset is not None and file_name not in case_subset:
+                    continue
+
                 landmarks_pred = process_file(file, original_mask_folder, probabilities_map)
                 if len(landmarks_pred.keys()) < 5 and type_set == "six_landmarks":
                     add_info_logging(f"img: {file.name}, not found landmark: {6 - len(landmarks_pred.keys())}",
                                      "result_logger")
                 elif len(landmarks_pred.keys()) < 1 and type_set == "gh_landmark":
                     add_info_logging(f"img: {file.name}, not found landmark", "result_logger")
-
-                if file.name.endswith(".npz"):
-                    file_name = file.name[:-4]
-                elif file.name.endswith(".nii.gz"):
-                    file_name = file.name[:-7]
 
                 results = _compute_errors(dict_all_case[file_name], landmarks_pred, results, file_name)
 
@@ -535,6 +627,8 @@ def landmarks_analysis(data_path, dict_all_case,
                     if num_key != "all" and num_key in landmarks_pred
                 }
 
+            if not results:
+                return predictions
             # Сохраняем подробный CSV
             results_df = pd.DataFrame(results)
             results_df.to_csv(results_csv_path, index=False)
@@ -552,17 +646,18 @@ def landmarks_analysis(data_path, dict_all_case,
         std_error_slo_norm = results_df[results_df['group'] == "n"]["error"].std(numeric_only=True)
 
         if type_set == "six_landmarks":
-            num_img = int(len(results_df["error"]) / 6)
-            not_found = (results_df["error"].isna().sum() / (num_img * 6)) * 100
-            num_img_ger_pat = int(len(results_df[results_df['group'] == "g"]["error"]) / 6)
+            num_points = sum(1 for k in point_name if k != "all")
+            num_img = int(len(results_df["error"]) / num_points)
+            not_found = (results_df["error"].isna().sum() / (num_img * num_points)) * 100
+            num_img_ger_pat = int(len(results_df[results_df['group'] == "g"]["error"]) / num_points)
             not_found_ger_pat = (results_df[results_df['group'] == "g"]["error"].isna().sum() / (
-                    num_img_ger_pat * 6)) * 100
-            num_img_slo_pat = int(len(results_df[results_df['group'] == "p"]["error"]) / 6)
+                    num_img_ger_pat * num_points)) * 100
+            num_img_slo_pat = int(len(results_df[results_df['group'] == "p"]["error"]) / num_points)
             not_found_slo_pat = (results_df[results_df['group'] == "p"]["error"].isna().sum() / (
-                    num_img_slo_pat * 6)) * 100
-            num_img_slo_norm = int(len(results_df[results_df['group'] == "n"]["error"]) / 6)
+                    num_img_slo_pat * num_points)) * 100
+            num_img_slo_norm = int(len(results_df[results_df['group'] == "n"]["error"]) / num_points)
             not_found_slo_norm = (results_df[results_df['group'] == "n"]["error"].isna().sum() / (
-                    num_img_slo_norm * 6)) * 100
+                    num_img_slo_norm * num_points)) * 100
         elif type_set == "gh_landmark":
             num_img = int(len(results_df["error"]))
             not_found = (results_df["error"].isna().sum() / num_img) * 100
@@ -589,16 +684,19 @@ def landmarks_analysis(data_path, dict_all_case,
         plot_table(data_table, columns, results_table_path)
 
         if type_set == "six_landmarks":
-            point_name_dict = {"all": "All", "r": "R", "l": "L", "n": "N", "rlc": "RLC", "rnc": "RNC", "lnc": "LNC"}
-            graph_folder = result_folder_path / "six_landmarks_comparsion"
+            if active_point_name is not None:
+                point_name_dict = {v: v.upper() for k, v in point_name.items() if k != "all"}
+                graph_folder = result_folder_path / "exp_landmarks_comparsion"
+            else:
+                point_name_dict = {"all": "All", "r": "R", "l": "L", "n": "N", "rlc": "RLC", "rnc": "RNC", "lnc": "LNC"}
+                graph_folder = result_folder_path / "six_landmarks_comparsion"
+                mean_r_error = results_df[results_df['point_id'] == "r"]["error"].mean(numeric_only=True)
+                mean_l_error = results_df[results_df['point_id'] == "l"]["error"].mean(numeric_only=True)
+                mean_n_error = results_df[results_df['point_id'] == "n"]["error"].mean(numeric_only=True)
+                mean_rlc_error = results_df[results_df['point_id'] == "rlc"]["error"].mean(numeric_only=True)
+                mean_rnc_error = results_df[results_df['point_id'] == "rnc"]["error"].mean(numeric_only=True)
+                mean_lnc_error = results_df[results_df['point_id'] == "lnc"]["error"].mean(numeric_only=True)
             graph_folder.mkdir(parents=True, exist_ok=True)
-
-            mean_r_error = results_df[results_df['point_id'] == "r"]["error"].mean(numeric_only=True)
-            mean_l_error = results_df[results_df['point_id'] == "l"]["error"].mean(numeric_only=True)
-            mean_n_error = results_df[results_df['point_id'] == "n"]["error"].mean(numeric_only=True)
-            mean_rlc_error = results_df[results_df['point_id'] == "rlc"]["error"].mean(numeric_only=True)
-            mean_rnc_error = results_df[results_df['point_id'] == "rnc"]["error"].mean(numeric_only=True)
-            mean_lnc_error = results_df[results_df['point_id'] == "lnc"]["error"].mean(numeric_only=True)
 
         elif type_set == "gh_landmark":
             point_name_dict = {"gh": "Geometric Height"}

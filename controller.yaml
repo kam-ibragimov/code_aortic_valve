@@ -1,3 +1,4 @@
+analys_experiment_result_6_landmarks: true
 analys_result_6_landmarks: true
 analys_result_aorta_segment: true
 analys_result_br_2d: true
@@ -39,6 +40,7 @@ name_gh_landmark: GhLandmark
 name_gh_lines: GhLines
 nnUNet_6_landmarks_train: true
 nnUNet_aorta_segment_train: true
+nnUNet_br_2d_pred_plane: true
 nnUNet_br_2d_train: true
 nnUNet_ci_lines_train: true
 nnUNet_gh_landmark_train: true
