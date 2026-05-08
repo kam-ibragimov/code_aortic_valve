@@ -30,7 +30,7 @@ def load_mask(file_path, probabilities_map=True):
     else:
         mask_img = sitk.ReadImage(file_path)
         mask_array = sitk.GetArrayFromImage(mask_img)
-        labels = np.unique(mask_array).max()
+        labels = int(np.unique(mask_array).max()) + 1
         return mask_array, labels
 
 
@@ -377,7 +377,7 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases,
             gt_points = np.array(dict_cases[case_name]["BR - closed"])
 
             distances = [np.sqrt(np.sum((pred_boundary - p) ** 2, axis=1)).min() for p in gt_points]
-            asd = float(np.mean(distances))
+            mpcd = float(np.mean(distances))
             if plane_offset_mode == "detect":
                 offset = _detect_plane_offset(distances)
             elif plane_offset_mode == "key":
@@ -388,7 +388,7 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases,
             per_case_data.append({
                 "case": case_name,
                 "group": first_char,
-                "ASD": round(asd, 3),
+                "MPCD": round(mpcd, 3),
                 "plane_offset": offset
             })
 
@@ -417,8 +417,8 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases,
 
     df_valid = df[~df["plane_offset"]]
 
-    data_for_plot = df_valid[['group', 'ASD']].dropna(how='any')
-    plot_group_comparison('group', 'ASD', group_label_map, data_for_plot,
+    data_for_plot = df_valid[['group', 'MPCD']].dropna(how='any')
+    plot_group_comparison('group', 'MPCD', group_label_map, data_for_plot,
                           os.path.join(str(result_folder_path), "basal_ring_comparison"))
 
     def _group_stats(group_key):
@@ -428,7 +428,7 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases,
             return float('nan'), 0, "0%"
         sub_valid = sub[~sub["plane_offset"]]
         total_valid = len(sub_valid)
-        asd_mean = round(float(sub_valid["ASD"].mean()), 2) if total_valid > 0 else float('nan')
+        asd_mean = round(float(sub_valid["MPCD"].mean()), 2) if total_valid > 0 else float('nan')
         offset_pct = f"{round(100 * sub['plane_offset'].sum() / total_all, 1)}%"
         return asd_mean, total_valid, offset_pct
 
@@ -444,7 +444,7 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases,
         asd_mean, total, offset_pct = _group_stats(group_key)
         data_table.append([label, asd_mean, total, offset_pct])
 
-    columns = ["Type", "ASD,\nmm", "Total\ncases", "Plane offset\ncases, %"]
+    columns = ["Type", "Mean Point-to-Curve\nDistance, mm", "Number of\nimages", "Plane offset\ncases, %"]
     plot_table(data_table, columns, os.path.join(result_folder_path, f"br_errors_{folder_name}.png"))
     add_info_logging("Basal ring analysis completed", "work_logger")
     return predictions

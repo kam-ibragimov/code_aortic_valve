@@ -23,6 +23,7 @@ crop_img_size:
 crop_mask_aorta_segment: true
 duplication_geometric_heights: true
 experiment: true
+export_predicted_case_points: true
 extract_2d_slices: true
 find_and_create_mask_gh_landmark: true
 find_geometric_heights: true

@@ -78,6 +78,25 @@ def ref_points(case_data, template):
     return template
 
 
+def pred_ref_points(case_data, template):
+    allowed_keys = ["R_pred", "L_pred", "N_pred", "RLC_pred", "RNC_pred", "LNC_pred"]
+    points_list = []
+    n = 1
+    for key in allowed_keys:
+        point = case_data.get(key)
+        if point is None:
+            continue
+        temp_point = copy.deepcopy(template_point)
+        temp_point["id"] = str(n)
+        temp_point["label"] = key
+        temp_point["position"] = point[0] if isinstance(point[0], (list, tuple)) else point
+        points_list.append(temp_point)
+        n += 1
+    template["markups"][0]["controlPoints"] = points_list
+    template["markups"][0]["lastUsedControlPointNumber"] = len(points_list)
+    return template
+
+
 def convert_nii_to_nrrd(input_path, output_path, check=True, is_mask=False, segmentation=False):
     image = sitk.ReadImage(input_path)
 
@@ -155,6 +174,7 @@ class ProjectGenerator:
                  gh_lines_pred_mask_file=None,
                  ci_lines_pred_mask_file=None,
                  br_2d_pred_mask_file=None,
+                 pred_aorta_mask_file=None,
                  base_path="cases"):
         self.case_name = case_name
         self.output_folder = output_folder
@@ -166,6 +186,7 @@ class ProjectGenerator:
         self.gh_lines_pred_mask_file = gh_lines_pred_mask_file
         self.ci_lines_pred_mask_file = ci_lines_pred_mask_file
         self.br_2d_pred_mask_file = br_2d_pred_mask_file
+        self.pred_aorta_mask_file = pred_aorta_mask_file
         self.gh_pred_data = None
 
     def _curve_pred_data_generate(self, mask_file, keys, n_samples=20, spline_smoothing=0.1):
@@ -174,7 +195,7 @@ class ProjectGenerator:
         result = {}
         masks_pred, levels_pred = load_mask(mask_file, False)
         vtk_curve_extractor = CenterlineExtractor(spline_smoothing=spline_smoothing)
-        for label in range(1, levels_pred + 1):
+        for label in range(1, levels_pred):
             if label not in keys:
                 continue
             mask_pred = (masks_pred == label).astype(np.uint8)
@@ -245,6 +266,14 @@ class ProjectGenerator:
         if attention:
             self.attentions.append(f"SegMask.seg.nrrd: {attention}")
 
+        if self.pred_aorta_mask_file and os.path.exists(self.pred_aorta_mask_file):
+            attention = convert_nii_to_nrrd(
+                self.pred_aorta_mask_file,
+                os.path.join(case_folder_path, "PredSegMask.seg.nrrd"), is_mask=True, segmentation=True
+            )
+            if attention:
+                self.attentions.append(f"PredSegMask.seg.nrrd: {attention}")
+
         for filename in os.listdir(self.templates_folder):
             if filename.endswith(".mrml"):
                 if bool(self.gh_pred_data) == ("_pred" in filename[:-5]):
@@ -268,6 +297,8 @@ class ProjectGenerator:
                         continue
                 elif filename == 'RefPoints.json':
                     new_json = ref_points(self.case_data, template)
+                elif filename == 'PredPoints.json':
+                    new_json = pred_ref_points(self.case_data, template)
                 else:
                     continue
                 json_save(new_json, os.path.join(case_folder_path, filename))

@@ -8,6 +8,7 @@ def main(data_path):
     output_folder = os.path.join(data_path, "result", "cases_visualization")
     original_img_folder = os.path.join(data_path, "image_nii")
     original_aorta_mask_folder = os.path.join(data_path, "mask_aorta_segment")
+    pred_aorta_mask_folder = os.path.join(data_path,  "nnUNet_folder", "nnUNet_test", "Dataset421_AortaSegment")
     gh_lines_pred_mask_folder = os.path.join(data_path, "nnUNet_folder", "nnUNet_test", "Dataset424_GhLines")
     ci_lines_pred_mask_folder = os.path.join(data_path, "nnUNet_folder", "nnUNet_test", "Dataset425_CiLines")
     br_2d_pred_mask_folder = os.path.join(data_path, "nnUNet_folder", "nnUNet_test", "Dataset426_2DBasalRing")
@@ -35,7 +36,8 @@ def main(data_path):
                                  case_data=dict_all_case[selected_case],
                                  gh_lines_pred_mask_file=gh_lines_pred_mask_file,
                                  ci_lines_pred_mask_file=_pred_file(ci_lines_pred_mask_folder),
-                                 br_2d_pred_mask_file=_pred_file(br_2d_pred_mask_folder))
+                                 br_2d_pred_mask_file=_pred_file(br_2d_pred_mask_folder),
+                                 pred_aorta_mask_file=_pred_file(pred_aorta_mask_folder))
     project_file = generator.generate()
 
     print(f"Project created: {project_file}")

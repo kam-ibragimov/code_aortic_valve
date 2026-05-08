@@ -818,6 +818,75 @@ def controller(data_path, cpus):
         controller_dump["calc_morphometric"] = True
         yaml_save(controller_dump, controller_path)
 
+    if not controller_dump.get("export_predicted_case_points"):
+        template_path = os.path.join(script_dir, "templates", "case_point_template.txt")
+        pred_output_folder = os.path.join(result_folder, "Predicted case points")
+        clear_folder(pred_output_folder)
+
+        with open(template_path, "r") as f:
+            tmpl_lines = [line.rstrip("\n") for line in f]
+
+        sections = []
+        i = 1  # skip "case_name" header line
+        while i < len(tmpl_lines):
+            line = tmpl_lines[i].strip()
+            if not line or line == "-":
+                i += 1
+                continue
+            label = line
+            dash_count = 0
+            i += 1
+            while i < len(tmpl_lines) and tmpl_lines[i].strip() == "-":
+                dash_count += 1
+                i += 1
+            sections.append((label, dash_count >= 2))
+
+        def _fmt_pt(coords):
+            return " ".join(f"{v:.2f}" for v in coords)
+
+        def _label_to_pred_key(tmpl_label):
+            return tmpl_label.replace(" - closed", "") + "_pred"
+
+        csv_rows = []
+        section_labels = [s[0] for s in sections]
+
+        for case_name, case_data in dict_all_case.items():
+            if case_name not in test_cases:
+                continue
+
+            out_lines = [case_name, ""]
+            csv_row = {"case_name": case_name}
+
+            for label, is_multi in sections:
+                pred_key = _label_to_pred_key(label)
+                value = case_data.get(pred_key)
+                out_lines.append(label)
+
+                if value is None:
+                    csv_row[label] = "x"
+                    out_lines.append("-")
+                    if is_multi:
+                        out_lines.append("-")
+                else:
+                    csv_row[label] = "o"
+                    if is_multi:
+                        for pt in value:
+                            out_lines.append(_fmt_pt(pt))
+                    else:
+                        out_lines.append(_fmt_pt(value))
+                out_lines.append("")
+
+            out_path = os.path.join(pred_output_folder, f"{case_name}.txt")
+            with open(out_path, "w") as f:
+                f.write("\n".join(out_lines))
+            csv_rows.append(csv_row)
+
+        df_pred = pd.DataFrame(csv_rows, columns=["case_name"] + section_labels)
+        df_pred.to_csv(os.path.join(pred_output_folder, "predicted_case_points_presence.csv"), index=False)
+
+        controller_dump["export_predicted_case_points"] = True
+        yaml_save(controller_dump, controller_path)
+
     if not controller_dump["experiment"]:
         experiment_training(create_img=False, create_models=True)
         experiment_analysis(data_path=data_path,
