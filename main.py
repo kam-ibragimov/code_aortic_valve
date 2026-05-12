@@ -26,7 +26,7 @@ from data_visualization.markers import (slices_with_markers, process_markers, fi
                                         process_mask_curve_lines)
 from models.controller_nnUnet import process_nnunet
 from experiments.nnUnet_experiments import experiment_training
-from models.controller_GNN import process_gnn
+from models.controller_GNN import process_gnn, process_gnn_interobserver
 from data_preprocessing.oblique_slice_extractor import find_global_2d_size, extract_2d_slice_pair, compute_br_plane_offset
 
 # from optimization.parallelization import division_processes
@@ -79,6 +79,8 @@ def controller(data_path, cpus):
     stl_aorta_segment_folder = os.path.join(data_path, "stl_aorta_segment")
     nnUNet_folder = os.path.join(data_path, "nnUNet_folder")
     gnn_folder = os.path.join(data_path, "gnn_folder")
+    gnn_interobserver_folder = os.path.join(data_path, "gnn_interobserver_study")
+    interobserver_txt_points_folder = os.path.join(data_path, "interobserver_txt_points")
     mask_aorta_segment_folder = os.path.join(data_path, "mask_aorta_segment")
     mask_aorta_segment_crop_folder = os.path.join(data_path, "mask_aorta_segment_crop")
     image_br_2d_folder = os.path.join(data_path, "image_basal_ring_2d")
@@ -580,6 +582,14 @@ def controller(data_path, cpus):
                     train_test_lists=train_test_lists, json_info_folder=json_info_folder,
                     create_ds=False, training_mod=False, testing_mod=True)
         controller_dump["gnn_metrics_train_test"] = True
+        yaml_save(controller_dump, controller_path)
+
+    if not controller_dump.get("gnn_interobserver_study"):
+        process_gnn_interobserver(gnn_folder=gnn_interobserver_folder,
+                                   json_info_folder=json_info_folder,
+                                   interobserver_txt_folder=interobserver_txt_points_folder,
+                                   create_ds=True, testing_mod=True)
+        controller_dump["gnn_interobserver_study"] = True
         yaml_save(controller_dump, controller_path)
 
     if not controller_dump["duplication_geometric_heights"]:

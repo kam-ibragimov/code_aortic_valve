@@ -609,25 +609,14 @@ class MorphoGNN_Visualizer():
         plt.savefig(result_folder + "/error_boxplot.png")
         print("Error boxplot saved to error_boxplot.png")
 
-    def visualize_comparison(df, save_dir=None, show=False, measurements=None, jitter=0.0):
+    def visualize_comparison(df, save_dir=None, show=False, measurements=None, jitter=0.0,
+                             method1_col="abs_err_gnn", method2_col="abs_err_center",
+                             method1_label="GNN", method2_label="Center"):
         """
-        Visualize GNN vs Center vs Reference from the tidy dataframe produced by build_comparison_df.
+        Visualize method1 vs method2 vs Reference from the tidy dataframe.
 
         Expected df columns:
-          ['case','measurement','ref','gnn','center','abs_err_gnn','abs_err_center']
-
-        Creates 3 figure types:
-          1) Parity plots per measurement (Ref on x, Prediction on y) for GNN and Center
-          2) Median absolute error bars by measurement for GNN and Center
-          3) Boxplots of absolute errors by measurement for GNN and Center
-
-        Parameters
-        ----------
-        df : DataFrame
-        save_dir : optional folder to save PNGs (created if missing)
-        show : whether to plt.show() the figures
-        measurements : optional subset of measurement names to include
-        jitter : small random jitter added to y-values in parity plots
+          ['case','measurement','ref', method1_col, method2_col, abs_err_{method1_col}, abs_err_{method2_col}]
         """
         if df.empty:
             print("visualize_comparison: dataframe is empty; nothing to plot.")
@@ -642,17 +631,17 @@ class MorphoGNN_Visualizer():
         # 2) Median absolute error bars by measurement
         agg = (
             df.replace([np.inf, -np.inf], np.nan)
-            .dropna(subset=["abs_err_gnn", "abs_err_center"], how="all")
-            .groupby("measurement")[["abs_err_gnn", "abs_err_center"]]
+            .dropna(subset=[method1_col, method2_col], how="all")
+            .groupby("measurement")[[method1_col, method2_col]]
             .median()
-            .sort_values("abs_err_gnn")
+            .sort_values(method1_col)
         )
         if not agg.empty:
             fig = plt.figure(figsize=(max(6, 0.6 * len(agg)), 4))
             ax = fig.add_subplot(111)
             x = np.arange(len(agg))
-            ax.bar(x - 0.2, agg["abs_err_gnn"].to_numpy(), width=0.4, label="GNN")
-            ax.bar(x + 0.2, agg["abs_err_center"].to_numpy(), width=0.4, label="Center")
+            ax.bar(x - 0.2, agg[method1_col].to_numpy(), width=0.4, label=method1_label)
+            ax.bar(x + 0.2, agg[method2_col].to_numpy(), width=0.4, label=method2_label)
             ax.set_xticks(x)
             ax.set_xticklabels(agg.index, rotation=45, ha="right")
             ax.set_ylabel("Median absolute error")
@@ -667,11 +656,10 @@ class MorphoGNN_Visualizer():
                 plt.close(fig)
 
         # 3) Error distributions (boxplots)
-        # Prepare long form for boxplots
         df_long = pd.melt(
             df,
             id_vars=["measurement", "case"],
-            value_vars=["abs_err_gnn", "abs_err_center"],
+            value_vars=[method1_col, method2_col],
             var_name="method",
             value_name="abs_error",
         ).replace([np.inf, -np.inf], np.nan).dropna(subset=["abs_error"])
@@ -679,9 +667,9 @@ class MorphoGNN_Visualizer():
             for m, d in df_long.groupby("measurement"):
                 fig = plt.figure(figsize=(5, 4))
                 ax = fig.add_subplot(111)
-                data = [d.loc[d["method"] == "abs_err_gnn", "abs_error"].to_numpy(),
-                        d.loc[d["method"] == "abs_err_center", "abs_error"].to_numpy()]
-                ax.boxplot(data, labels=["GNN", "Center"], showfliers=False)
+                data = [d.loc[d["method"] == method1_col, "abs_error"].to_numpy(),
+                        d.loc[d["method"] == method2_col, "abs_error"].to_numpy()]
+                ax.boxplot(data, labels=[method1_label, method2_label], showfliers=False)
                 ax.set_title(f"Absolute error distribution - {m}")
                 ax.set_ylabel("Absolute error")
                 ax.grid(True, axis="y", linestyle=":")
@@ -692,25 +680,14 @@ class MorphoGNN_Visualizer():
                 else:
                     plt.close(fig)
 
-    def visualize_comparison_mean(df, save_dir=None, show=False, measurements=None, jitter=0.0):
+    def visualize_comparison_mean(df, save_dir=None, show=False, measurements=None, jitter=0.0,
+                                  method1_col="abs_err_gnn", method2_col="abs_err_center",
+                                  method1_label="GNN", method2_label="Center"):
         """
-        Visualize GNN vs Center vs Reference from the tidy dataframe produced by build_comparison_df.
+        Visualize method1 vs method2 vs Reference from the tidy dataframe.
 
         Expected df columns:
-          ['case','measurement','ref','gnn','center','abs_err_gnn','abs_err_center']
-
-        Creates 3 figure types:
-          1) Parity plots per measurement (Ref on x, Prediction on y) for GNN and Center
-          2) Median absolute error bars by measurement for GNN and Center
-          3) Boxplots of absolute errors by measurement for GNN and Center
-
-        Parameters
-        ----------
-        df : DataFrame
-        save_dir : optional folder to save PNGs (created if missing)
-        show : whether to plt.show() the figures
-        measurements : optional subset of measurement names to include
-        jitter : small random jitter added to y-values in parity plots
+          ['case','measurement','ref', method1_col, method2_col]
         """
         if df.empty:
             print("visualize_comparison: dataframe is empty; nothing to plot.")
@@ -725,17 +702,17 @@ class MorphoGNN_Visualizer():
         # 2) Mean absolute error bars by measurement
         agg = (
             df.replace([np.inf, -np.inf], np.nan)
-            .dropna(subset=["abs_err_gnn", "abs_err_center"], how="all")
-            .groupby("measurement")[["abs_err_gnn", "abs_err_center"]]
+            .dropna(subset=[method1_col, method2_col], how="all")
+            .groupby("measurement")[[method1_col, method2_col]]
             .mean()
-            .sort_values("abs_err_gnn")
+            .sort_values(method1_col)
         )
         if not agg.empty:
             fig = plt.figure(figsize=(max(6, 0.6 * len(agg)), 4))
             ax = fig.add_subplot(111)
             x = np.arange(len(agg))
-            ax.bar(x - 0.2, agg["abs_err_gnn"].to_numpy(), width=0.4, label="GNN")
-            ax.bar(x + 0.2, agg["abs_err_center"].to_numpy(), width=0.4, label="Center")
+            ax.bar(x - 0.2, agg[method1_col].to_numpy(), width=0.4, label=method1_label)
+            ax.bar(x + 0.2, agg[method2_col].to_numpy(), width=0.4, label=method2_label)
             ax.set_xticks(x)
             ax.set_xticklabels(agg.index, rotation=45, ha="right")
             ax.set_ylabel("Mean absolute error")
@@ -750,11 +727,10 @@ class MorphoGNN_Visualizer():
                 plt.close(fig)
 
         # 3) Error distributions (boxplots)
-        # Prepare long form for boxplots
         df_long = pd.melt(
             df,
             id_vars=["measurement", "case"],
-            value_vars=["abs_err_gnn", "abs_err_center"],
+            value_vars=[method1_col, method2_col],
             var_name="method",
             value_name="abs_error",
         ).replace([np.inf, -np.inf], np.nan).dropna(subset=["abs_error"])
@@ -762,9 +738,9 @@ class MorphoGNN_Visualizer():
             for m, d in df_long.groupby("measurement"):
                 fig = plt.figure(figsize=(5, 4))
                 ax = fig.add_subplot(111)
-                data = [d.loc[d["method"] == "abs_err_gnn", "abs_error"].to_numpy(),
-                        d.loc[d["method"] == "abs_err_center", "abs_error"].to_numpy()]
-                ax.boxplot(data, labels=["GNN", "Center"], showfliers=False)
+                data = [d.loc[d["method"] == method1_col, "abs_error"].to_numpy(),
+                        d.loc[d["method"] == method2_col, "abs_error"].to_numpy()]
+                ax.boxplot(data, labels=[method1_label, method2_label], showfliers=False)
                 ax.set_title(f"Absolute error distribution - {m}")
                 ax.set_ylabel("Absolute error")
                 ax.grid(True, axis="y", linestyle=":")
@@ -940,23 +916,28 @@ class MorphoGCN_Trainer:
         return pred_dict, targ_dict
 
     def __build_comparison_df(self,
-                              all_predictions,  # {case: {measurement: gnn}}
+                              all_predictions,  # {case: {measurement: method1}}
                               all_targets,  # {case: {measurement: ref}}
-                              centerpoint_labels,  # {case: {measurement: center}}
+                              centerpoint_labels,  # {case: {measurement: method2}}
                               case_order=None,
                               meas_order=None,
-                              save_csv=None):
+                              save_csv=None,
+                              method1_col="gnn",
+                              method2_col="center"):
         # cases = intersection of the three dicts (preserve order if provided)
         if case_order is None:
             cases = sorted(set(all_predictions) & set(all_targets) & set(centerpoint_labels))
         else:
             cases = [c for c in case_order if c in all_predictions and c in all_targets and c in centerpoint_labels]
 
+        abs_err_col1 = f"abs_err_{method1_col}"
+        abs_err_col2 = f"abs_err_{method2_col}"
+
         rows = []
         for case in cases:
             ref_dict = all_targets[case]
-            gnn_dict = all_predictions.get(case, {})
-            cen_dict = centerpoint_labels.get(case, {})
+            m1_dict = all_predictions.get(case, {})
+            m2_dict = centerpoint_labels.get(case, {})
 
             # measurements = provided order or keys from reference
             names = (meas_order if meas_order is not None else list(ref_dict.keys()))
@@ -965,16 +946,16 @@ class MorphoGCN_Trainer:
                 if m not in ref_dict:
                     continue
                 ref_v = float(ref_dict[m])
-                gnn_v = float(gnn_dict.get(m, np.nan))
-                cen_v = float(cen_dict.get(m, np.nan))
+                m1_v = float(m1_dict.get(m, np.nan))
+                m2_v = float(m2_dict.get(m, np.nan))
                 rows.append({
                     "case": case,
                     "measurement": m,
                     "ref": ref_v,
-                    "gnn": gnn_v,
-                    "center": cen_v,
-                    "abs_err_gnn": abs(gnn_v - ref_v) if np.isfinite(gnn_v) else np.nan,
-                    "abs_err_center": abs(cen_v - ref_v) if np.isfinite(cen_v) else np.nan,
+                    method1_col: m1_v,
+                    method2_col: m2_v,
+                    abs_err_col1: abs(m1_v - ref_v) if np.isfinite(m1_v) else np.nan,
+                    abs_err_col2: abs(m2_v - ref_v) if np.isfinite(m2_v) else np.nan,
                 })
 
         df = pd.DataFrame(rows)
@@ -986,9 +967,9 @@ class MorphoGCN_Trainer:
         # quick summary
         if not df.empty:
             summary = (
-                df.groupby("measurement")[["abs_err_gnn", "abs_err_center"]]
+                df.groupby("measurement")[[abs_err_col1, abs_err_col2]]
                 .median()
-                .sort_values("abs_err_gnn")
+                .sort_values(abs_err_col1)
             )
             print("\nMedian absolute error by measurement:")
             print(summary)
@@ -1041,24 +1022,28 @@ class MorphoGCN_Trainer:
         return a[np.isfinite(a)]
 
     # ---------- 1) Normal-distribution style plots ----------
-    def __plot_normals_both_methods_per_measurement(self, df, measurement, outfile):
+    def __plot_normals_both_methods_per_measurement(self, df, measurement, outfile,
+                                                    method1_col="abs_err_gnn",
+                                                    method2_col="abs_err_center",
+                                                    method1_label="GNN",
+                                                    method2_label="Center"):
         """
-        For a given measurement, overlay normal curves for abs_err_gnn (solid)
-        and abs_err_center (dashed) for each cohort (color).
+        For a given measurement, overlay normal curves for both error columns (solid/dashed)
+        per cohort (color).
         """
         sub = df[df["measurement"] == measurement]
         if sub.empty:
             return
 
         # Collect stats for both methods per cohort
-        stats = []  # (cohort, method, mu, sigma)
+        stats = []  # (cohort, method_label, mu, sigma)
         for coh, g in sub.groupby("cohort"):
-            vals_g = self.__finite(g["abs_err_gnn"])
-            vals_c = self.__finite(g["abs_err_center"])
-            if vals_g.size:
-                stats.append((coh, "GNN", float(vals_g.mean()), float(vals_g.std(ddof=1))))
-            if vals_c.size:
-                stats.append((coh, "Center", float(vals_c.mean()), float(vals_c.std(ddof=1))))
+            vals_1 = self.__finite(g[method1_col])
+            vals_2 = self.__finite(g[method2_col])
+            if vals_1.size:
+                stats.append((coh, method1_label, float(vals_1.mean()), float(vals_1.std(ddof=1))))
+            if vals_2.size:
+                stats.append((coh, method2_label, float(vals_2.mean()), float(vals_2.std(ddof=1))))
 
         if not stats:
             return
@@ -1068,7 +1053,7 @@ class MorphoGCN_Trainer:
         sigmas = np.array([s[3] for s in stats], dtype=float)
         sigma_all = np.nanmean(sigmas[np.isfinite(sigmas)])
         if not np.isfinite(sigma_all) or sigma_all == 0:
-            pooled = self.__finite(sub["abs_err_gnn"]).tolist() + self.__finite(sub["abs_err_center"]).tolist()
+            pooled = self.__finite(sub[method1_col]).tolist() + self.__finite(sub[method2_col]).tolist()
             sigma_all = np.std(pooled, ddof=1) if len(pooled) > 1 else 1.0
         mu_all = np.nanmean(mus)
         left = max(0.0, mu_all - 4 * sigma_all)
@@ -1078,24 +1063,24 @@ class MorphoGCN_Trainer:
         # Plot
         plt.figure(figsize=(7.5, 4.8))
         for coh in sorted(sub["cohort"].unique().tolist()):
-            # GNN (solid)
-            pair = [s for s in stats if s[0] == coh and s[1] == "GNN"]
+            # method1 (solid)
+            pair = [s for s in stats if s[0] == coh and s[1] == method1_label]
             if pair:
                 _, _, mu, sigma = pair[0]
                 y = self.__normal_pdf(x, mu, sigma)
                 plt.plot(x, y, color=COHORT_COLORS.get(coh, "#7f7f7f"),
-                         linewidth=2.2, linestyle="-", label=f"{coh} — GNN")
-            # Center (dashed)
-            pair = [s for s in stats if s[0] == coh and s[1] == "Center"]
+                         linewidth=2.2, linestyle="-", label=f"{coh} — {method1_label}")
+            # method2 (dashed)
+            pair = [s for s in stats if s[0] == coh and s[1] == method2_label]
             if pair:
                 _, _, mu, sigma = pair[0]
                 y = self.__normal_pdf(x, mu, sigma)
                 plt.plot(x, y, color=COHORT_COLORS.get(coh, "#7f7f7f"),
-                         linewidth=2.2, linestyle="--", label=f"{coh} — Center")
+                         linewidth=2.2, linestyle="--", label=f"{coh} — {method2_label}")
 
         plt.xlabel("Absolute error")
         plt.ylabel("Normal PDF")
-        plt.title(f"{measurement} — Normal curves (GNN solid, Center dashed)")
+        plt.title(f"{measurement} — Normal curves ({method1_label} solid, {method2_label} dashed)")
         # Reduce legend clutter: combine duplicates by label
         handles, labels = plt.gca().get_legend_handles_labels()
         seen, h_clean, l_clean = set(), [], []
@@ -1109,10 +1094,14 @@ class MorphoGCN_Trainer:
         plt.savefig(outfile, dpi=400)
         plt.close()
 
-    def __plot_box_both_methods_per_measurement(self, df, measurement, outfile, include_total=True):
+    def __plot_box_both_methods_per_measurement(self, df, measurement, outfile, include_total=True,
+                                                method1_col="abs_err_gnn",
+                                                method2_col="abs_err_center",
+                                                method1_label="GNN",
+                                                method2_label="Center"):
         """
         For a given measurement, draws grouped boxplots by cohort:
-          per cohort -> two boxes: [GNN, Center]
+          per cohort -> two boxes: [method1, method2]
         If include_total=True, appends one extra pair "Total" pooling all cohorts.
         """
         sub = df[df["measurement"] == measurement]
@@ -1121,39 +1110,39 @@ class MorphoGCN_Trainer:
 
         # Cohorts (preserve order from grouping)
         cohorts = [c for c, _ in sub.groupby("cohort")]
-        data_gnn = [self.__finite(sub[sub["cohort"] == c]["abs_err_gnn"]) for c in cohorts]
-        data_ctr = [self.__finite(sub[sub["cohort"] == c]["abs_err_center"]) for c in cohorts]
+        data_m1 = [self.__finite(sub[sub["cohort"] == c][method1_col]) for c in cohorts]
+        data_m2 = [self.__finite(sub[sub["cohort"] == c][method2_col]) for c in cohorts]
 
         if include_total:
             cohorts = cohorts + ["Total"]
-            data_gnn = data_gnn + [self.__finite(sub["abs_err_gnn"])]
-            data_ctr = data_ctr + [self.__finite(sub["abs_err_center"])]
+            data_m1 = data_m1 + [self.__finite(sub[method1_col])]
+            data_m2 = data_m2 + [self.__finite(sub[method2_col])]
 
         # positions: for each cohort make a pair of boxes close together
         n = len(cohorts)
         base_positions = np.arange(n) * 3.0  # cluster spacing
-        pos_gnn = base_positions - 0.4
-        pos_ctr = base_positions + 0.4
+        pos_m1 = base_positions - 0.4
+        pos_m2 = base_positions + 0.4
 
         plt.figure(figsize=(max(7, 1.3 * n), 5))
 
-        bp_g = plt.boxplot(
-            data_gnn, positions=pos_gnn, widths=0.7,
+        bp_1 = plt.boxplot(
+            data_m1, positions=pos_m1, widths=0.7,
             patch_artist=True, showfliers=True
         )
-        bp_c = plt.boxplot(
-            data_ctr, positions=pos_ctr, widths=0.7,
+        bp_2 = plt.boxplot(
+            data_m2, positions=pos_m2, widths=0.7,
             patch_artist=True, showfliers=True
         )
 
         # color & hatch by cohort (Total uses gray)
-        for i, box in enumerate(bp_g['boxes']):
+        for i, box in enumerate(bp_1['boxes']):
             coh = cohorts[i]
             color = COHORT_COLORS.get(coh, "#7f7f7f")
             box.set_facecolor(color);
             box.set_alpha(0.35);
             box.set_hatch("//")
-        for i, box in enumerate(bp_c['boxes']):
+        for i, box in enumerate(bp_2['boxes']):
             coh = cohorts[i]
             color = COHORT_COLORS.get(coh, "#7f7f7f")
             box.set_facecolor(color);
@@ -1161,7 +1150,7 @@ class MorphoGCN_Trainer:
             box.set_hatch("\\\\")
 
         # thicker lines
-        for coll in [bp_g, bp_c]:
+        for coll in [bp_1, bp_2]:
             for elem in ['boxes', 'whiskers', 'caps', 'medians', 'fliers']:
                 for item in coll[elem]:
                     item.set_linewidth(1.5)
@@ -1169,12 +1158,11 @@ class MorphoGCN_Trainer:
         # x ticks centered between the pair
         plt.xticks(base_positions, cohorts, rotation=0)
         plt.ylabel("Absolute error")
-        plt.title(f"{measurement} — Absolute error by cohort (GNN vs Center)")
-
+        plt.title(f"{measurement} — Absolute error by cohort ({method1_label} vs {method2_label})")
 
         legend_handles = [
-            Patch(facecolor="#cccccc", hatch="//", alpha=0.35, label="GNN"),
-            Patch(facecolor="#cccccc", hatch="\\\\", alpha=0.35, label="Center"),
+            Patch(facecolor="#cccccc", hatch="//", alpha=0.35, label=method1_label),
+            Patch(facecolor="#cccccc", hatch="\\\\", alpha=0.35, label=method2_label),
         ]
         plt.legend(handles=legend_handles, title="Method", loc="best")
 
@@ -1185,20 +1173,27 @@ class MorphoGCN_Trainer:
     # ======================
     # Driver
     # ======================
-    def __make_all_measurement_plots(self, df, plot_folder):
+    def __make_all_measurement_plots(self, df, plot_folder,
+                                     method1_col="abs_err_gnn", method2_col="abs_err_center",
+                                     method1_label="GNN", method2_label="Center"):
         df = self.__ensure_cohort_column(df)
         measurements = sorted(df["measurement"].dropna().unique().tolist())
 
         for m in measurements:
-            # Normal curves per measurement
-            self.__plot_normals_both_methods_per_measurement(df, m, f"{plot_folder}/{m}_NormalDistribution.png")
+            self.__plot_normals_both_methods_per_measurement(
+                df, m, f"{plot_folder}/{m}_NormalDistribution.png",
+                method1_col, method2_col, method1_label, method2_label)
 
-            # Box & whisker per measurement
-            self.__plot_box_both_methods_per_measurement(df, m, f"{plot_folder}/{m}_boxWhiskers.png")
+            self.__plot_box_both_methods_per_measurement(
+                df, m, f"{plot_folder}/{m}_boxWhiskers.png",
+                method1_col=method1_col, method2_col=method2_col,
+                method1_label=method1_label, method2_label=method2_label)
 
-    def save_error_stats_text(self, df, out_txt):
+    def save_error_stats_text(self, df, out_txt,
+                              method1_col="abs_err_gnn", method2_col="abs_err_center",
+                              method1_label="GNN", method2_label="Center"):
         """
-        Write mean / std / median / N for abs_err_gnn and abs_err_center
+        Write mean / std / median / N for both error columns
         for (a) all data and (b) cohorts by case prefix. Also per-measurement.
         """
         Path(out_txt).parent.mkdir(parents=True, exist_ok=True)
@@ -1211,7 +1206,7 @@ class MorphoGCN_Trainer:
         with open(out_txt, "w", encoding="utf-8") as f:
             f.write("Aortic Landmarking — Error Statistics\n")
             f.write("=====================================\n\n")
-            f.write("Metrics reported on absolute errors (abs_err_gnn, abs_err_center).\n")
+            f.write(f"Metrics reported on absolute errors ({method1_col}, {method2_col}).\n")
             f.write("Cohorts are inferred from case prefixes: HOM*, n*, p*.\n\n")
 
             for cohort in cohorts:
@@ -1226,8 +1221,8 @@ class MorphoGCN_Trainer:
                 # --- pooled over all measurements ---
                 f.write("Pooled over all measurements:\n")
                 pooled = {
-                    "abs_err_gnn": self.__describe_series(dsub["abs_err_gnn"]),
-                    "abs_err_center": self.__describe_series(dsub["abs_err_center"]),
+                    method1_label: self.__describe_series(dsub[method1_col]),
+                    method2_label: self.__describe_series(dsub[method2_col]),
                 }
                 for k, stats in pooled.items():
                     f.write(f"  {k} -> N={stats['N']}, mean={stats['mean']:.4f}, "
@@ -1238,14 +1233,14 @@ class MorphoGCN_Trainer:
                 f.write("Per-measurement:\n")
                 lines = []
                 for m, g in dsub.groupby("measurement", sort=True):
-                    gnn_stats = self.__describe_series(g["abs_err_gnn"])
-                    cen_stats = self.__describe_series(g["abs_err_center"])
+                    m1_stats = self.__describe_series(g[method1_col])
+                    m2_stats = self.__describe_series(g[method2_col])
                     line = (
                         f"- {m}: "
-                        f"abs_err_gnn [N={gnn_stats['N']}, mean={gnn_stats['mean']:.4f}, "
-                        f"std={gnn_stats['std']:.4f}, median={gnn_stats['median']:.4f}] ; "
-                        f"abs_err_center [N={cen_stats['N']}, mean={cen_stats['mean']:.4f}, "
-                        f"std={cen_stats['std']:.4f}, median={cen_stats['median']:.4f}]"
+                        f"{method1_col} [N={m1_stats['N']}, mean={m1_stats['mean']:.4f}, "
+                        f"std={m1_stats['std']:.4f}, median={m1_stats['median']:.4f}] ; "
+                        f"{method2_col} [N={m2_stats['N']}, mean={m2_stats['mean']:.4f}, "
+                        f"std={m2_stats['std']:.4f}, median={m2_stats['median']:.4f}]"
                     )
                     lines.append(line)
                 if lines:
@@ -1292,6 +1287,23 @@ class MorphoGCN_Trainer:
         all_predictions, all_targets = self.__arrays_to_dict_of_dict(all_predictions, all_targets, centerpoint_labels,
                                                                      case_names, meas_names)
         return all_predictions, all_targets, centerpoint_labels
+
+    def __compute_metrics_from_candidates_json(self, candidates_json_file, allowed_cases):
+        """Load candidates JSON and compute metrics using the first candidate per landmark."""
+        bank = DataLoaderLandmarks.load_candidates_json(candidates_json_file)
+        metrics_by_case = {}
+        for case, lm_dict in bank.items():
+            if case not in allowed_cases:
+                continue
+            sample = {}
+            for lm_name, payload in lm_dict.items():
+                pts = np.asarray(payload["candidate_points"], dtype=float)
+                if len(pts) == 0:
+                    raise ValueError(f"Case {case}, landmark {lm_name} has no candidates.")
+                sample[lm_name] = pts[0]
+            metr = landmarking_computeMeasurements_simplified(sample)
+            metrics_by_case[case] = metr.get_all_metrics()
+        return metrics_by_case
 
     def __compute_reference_metrics_from_jsons(self, testing_folders):
         """
@@ -1377,6 +1389,75 @@ class MorphoGCN_Trainer:
         )
 
         creat_box_plot(result_folder, "gnn_vs_center_comparison.csv")
+
+    def compare_interobserver(self, testing_folder, candidates_1set_json, candidates_2set_json, result_folder):
+        """
+        Inter-observer study: compare two sets of manual annotations against reference.
+
+        1 set → Inter-observer  (method1)
+        2 set → Intra-observer  (method2)
+
+        No GNN model required — each set provides a single candidate per landmark (weight=1.0),
+        so metrics are computed directly from that candidate point.
+        """
+        m1_col = "inter_observer"
+        m2_col = "intra_observer"
+        m1_err = "abs_err_inter"
+        m2_err = "abs_err_intra"
+        m1_label = "Inter-observer"
+        m2_label = "Intra-observer"
+
+        Path(result_folder).mkdir(parents=True, exist_ok=True)
+        Path(result_folder + "plots").mkdir(parents=True, exist_ok=True)
+
+        # --- (A) Reference metrics from testing JSONs
+        ref_by_case, _ = self.__compute_reference_metrics_from_jsons(testing_folder)
+        allowed_cases = set(ref_by_case.keys())
+        if not allowed_cases:
+            raise RuntimeError("No testing JSONs found -> unable to compute reference metrics.")
+
+        # --- (B) Metrics from each observer set (first/only candidate per landmark)
+        inter_metrics = self.__compute_metrics_from_candidates_json(candidates_1set_json, allowed_cases)
+        intra_metrics = self.__compute_metrics_from_candidates_json(candidates_2set_json, allowed_cases)
+
+        # --- (C) Build comparison DataFrame
+        df = self.__build_comparison_df(
+            all_predictions=inter_metrics,
+            all_targets=ref_by_case,
+            centerpoint_labels=intra_metrics,
+            method1_col=m1_col,
+            method2_col=m2_col,
+            save_csv=result_folder + "interobserver_comparison.csv"
+        )
+
+        # Rename error columns to semantic names
+        df = df.rename(columns={
+            f"abs_err_{m1_col}": m1_err,
+            f"abs_err_{m2_col}": m2_err,
+        })
+
+        # Re-save CSV with renamed error columns
+        df.to_csv(result_folder + "interobserver_comparison.csv", index=False)
+
+        self.save_error_stats_text(df, result_folder + "interobserver_summary.txt",
+                                   method1_col=m1_err, method2_col=m2_err,
+                                   method1_label=m1_label, method2_label=m2_label)
+
+        self.__make_all_measurement_plots(df, result_folder + "plots",
+                                          method1_col=m1_err, method2_col=m2_err,
+                                          method1_label=m1_label, method2_label=m2_label)
+
+        MorphoGNN_Visualizer.visualize_comparison_mean(
+            df,
+            save_dir=result_folder + "plots",
+            show=False,
+            method1_col=m1_err, method2_col=m2_err,
+            method1_label=m1_label, method2_label=m2_label
+        )
+
+        creat_box_plot(result_folder, "interobserver_comparison.csv",
+                       method1_col=m1_err, method2_col=m2_err,
+                       method1_label=m1_label, method2_label=m2_label)
 
 
 class nnUnet_CandidatePointGenerator:

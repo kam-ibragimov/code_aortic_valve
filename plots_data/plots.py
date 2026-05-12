@@ -5,7 +5,9 @@ import numpy as np
 import os
 
 
-def _save_combined_mean_sd(df, measurements, save_txt_path):
+def _save_combined_mean_sd(df, measurements, save_txt_path,
+                           method1_col="abs_err_gnn", method2_col="abs_err_center",
+                           method1_label="GNN", method2_label="Center"):
     """
     Считает mean ± sd для объединённого списка measurements
     и сохраняет результат в txt.
@@ -17,17 +19,17 @@ def _save_combined_mean_sd(df, measurements, save_txt_path):
     if subset.empty:
         raise ValueError("Нет данных для переданных measurement.")
 
-    gnn_vals = subset["abs_err_gnn"].dropna()
-    center_vals = subset["abs_err_center"].dropna()
+    m1_vals = subset[method1_col].dropna()
+    m2_vals = subset[method2_col].dropna()
 
-    if len(gnn_vals) == 0 and len(center_vals) == 0:
+    if len(m1_vals) == 0 and len(m2_vals) == 0:
         raise ValueError("Нет числовых значений для расчёта.")
 
-    gnn_mean = gnn_vals.mean()
-    gnn_sd = gnn_vals.std()
+    m1_mean = m1_vals.mean()
+    m1_sd = m1_vals.std()
 
-    center_mean = center_vals.mean()
-    center_sd = center_vals.std()
+    m2_mean = m2_vals.mean()
+    m2_sd = m2_vals.std()
 
     # --- запись в txt ---
     with open(save_txt_path, "w", encoding="utf-8") as f:
@@ -35,14 +37,16 @@ def _save_combined_mean_sd(df, measurements, save_txt_path):
         f.write("Combined measurements\n")
         f.write(f"Number of rows: {len(subset)}\n\n")
 
-        f.write("GNN (mean ± sd): ")
-        f.write(f"{gnn_mean:.3f} ± {gnn_sd:.3f}\n")
+        f.write(f"{method1_label} (mean ± sd): ")
+        f.write(f"{m1_mean:.3f} ± {m1_sd:.3f}\n")
 
-        f.write("Center (mean ± sd): ")
-        f.write(f"{center_mean:.3f} ± {center_sd:.3f}\n")
+        f.write(f"{method2_label} (mean ± sd): ")
+        f.write(f"{m2_mean:.3f} ± {m2_sd:.3f}\n")
 
 
-def _create_summary_table_plot(df, parameter_keys, save_path, save_txt_path, title):
+def _create_summary_table_plot(df, parameter_keys, save_path, save_txt_path, title,
+                               method1_col="abs_err_gnn", method2_col="abs_err_center",
+                               method1_label="GNN", method2_label="Center of mass"):
 
     rows = []
 
@@ -52,17 +56,17 @@ def _create_summary_table_plot(df, parameter_keys, save_path, save_txt_path, tit
         if subset.empty:
             continue
 
-        gnn_vals = subset["abs_err_gnn"].dropna()
-        center_vals = subset["abs_err_center"].dropna()
+        m1_vals = subset[method1_col].dropna()
+        m2_vals = subset[method2_col].dropna()
 
-        if len(gnn_vals) == 0 and len(center_vals) == 0:
+        if len(m1_vals) == 0 and len(m2_vals) == 0:
             continue
 
-        gnn_mean = gnn_vals.mean()
-        gnn_sd = gnn_vals.std()
+        m1_mean = m1_vals.mean()
+        m1_sd = m1_vals.std()
 
-        center_mean = center_vals.mean()
-        center_sd = center_vals.std()
+        m2_mean = m2_vals.mean()
+        m2_sd = m2_vals.std()
 
         label = parameter_keys[m][0]
         full_name = parameter_keys[m][1]
@@ -70,17 +74,20 @@ def _create_summary_table_plot(df, parameter_keys, save_path, save_txt_path, tit
         rows.append([
             label,
             full_name,
-            f"{gnn_mean:.2f} ± {gnn_sd:.2f}",
-            f"{center_mean:.2f} ± {center_sd:.2f}"
+            f"{m1_mean:.2f} ± {m1_sd:.2f}",
+            f"{m2_mean:.2f} ± {m2_sd:.2f}"
         ])
 
     # --- создаём figure ---
     fig, ax = plt.subplots(figsize=(7, 0.21 * len(rows) + 0.5))
     ax.axis("off")
 
+    col_label_1 = f"{method1_label}\n(mean ± sd)"
+    col_label_2 = f"{method2_label}\n(mean ± sd)"
+
     table = ax.table(
         cellText=rows,
-        colLabels=["Label", "Measurement", "GNN\n(mean ± sd)", "Center of mass\n(mean ± sd)"],
+        colLabels=["Label", "Measurement", col_label_1, col_label_2],
         loc="center",
         #cellLoc="left"
         bbox=[0, 0, 1, 1]  # растянуть на всю область
@@ -111,7 +118,7 @@ def _create_summary_table_plot(df, parameter_keys, save_path, save_txt_path, tit
     with open(save_txt_path, "w", encoding="utf-8") as f:
 
         # заголовки
-        headers = ["Label", "Measurement", "GNN (mean ± sd)", "Center of mass (mean ± sd)"]
+        headers = ["Label", "Measurement", f"{method1_label} (mean ± sd)", f"{method2_label} (mean ± sd)"]
         f.write("\t".join(headers) + "\n")
 
         # строки
@@ -119,7 +126,84 @@ def _create_summary_table_plot(df, parameter_keys, save_path, save_txt_path, tit
             f.write("\t".join(row) + "\n")
 
 
-def _plot_group(df, parameter_keys, save_path, title):
+def _create_aggregated_norm_table(df, groups, save_path, save_txt_path,
+                                   method1_col="abs_err_gnn", method2_col="abs_err_center",
+                                   method1_label="GNN", method2_label="Center of mass"):
+    """
+    Aggregated normalized MAE table.
+
+    For each measurement: norm_MAE = mean(abs_err) / mean(ref) * 100 %
+    For each group: report mean ± std of per-measurement norm_MAEs.
+
+    groups: dict {group_label: [measurement_name, ...]}
+    """
+    rows = []
+
+    for group_name, measurements in groups.items():
+        norm_m1, norm_m2 = [], []
+
+        for m in measurements:
+            subset = df[df["measurement"] == m]
+            if subset.empty:
+                continue
+            mean_ref = subset["ref"].dropna().mean()
+            if not np.isfinite(mean_ref) or mean_ref == 0:
+                continue
+            mean_err1 = subset[method1_col].dropna().mean()
+            mean_err2 = subset[method2_col].dropna().mean()
+            if np.isfinite(mean_err1):
+                norm_m1.append(mean_err1 / mean_ref * 100.0)
+            if np.isfinite(mean_err2):
+                norm_m2.append(mean_err2 / mean_ref * 100.0)
+
+        def _fmt(vals):
+            if not vals:
+                return "—"
+            mean = np.mean(vals)
+            std = np.std(vals, ddof=1) if len(vals) > 1 else 0.0
+            return f"{mean:.2f} ± {std:.2f}%"
+
+        rows.append([group_name, _fmt(norm_m1), _fmt(norm_m2)])
+
+    if not rows:
+        return
+
+    # --- figure ---
+    fig, ax = plt.subplots(figsize=(7, 0.4 * len(rows) + 0.8))
+    ax.axis("off")
+
+    table = ax.table(
+        cellText=rows,
+        colLabels=["Group", f"{method1_label}\nnorm. MAE (%)", f"{method2_label}\nnorm. MAE (%)"],
+        loc="center",
+        bbox=[0, 0, 1, 1]
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.auto_set_column_width(col=list(range(3)))
+
+    for (row, col), cell in table.get_celld().items():
+        cell.set_text_props(ha='center' if (row == 0 or col > 0) else 'left')
+        if row > 0:
+            cell.PAD = 0.06
+    for col in range(3):
+        table[(0, col)].set_height(table[(0, col)].get_height() * 1.8)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+
+    # --- txt ---
+    with open(save_txt_path, "w", encoding="utf-8") as f:
+        headers = ["Group", f"{method1_label} norm. MAE (%)", f"{method2_label} norm. MAE (%)"]
+        f.write("\t".join(headers) + "\n")
+        for row in rows:
+            f.write("\t".join(row) + "\n")
+
+
+def _plot_group(df, parameter_keys, save_path, title,
+                method1_col="abs_err_gnn", method2_col="abs_err_center",
+                method1_label="GNN", method2_label="Center of mass"):
     data = []
     positions = []
     labels = []
@@ -141,21 +225,14 @@ def _plot_group(df, parameter_keys, save_path, title):
         if subset.empty:
             continue
 
-        gnn_vals = subset["abs_err_gnn"].dropna().values
-        center_vals = subset["abs_err_center"].dropna().values
+        m1_vals = subset[method1_col].dropna().values
+        m2_vals = subset[method2_col].dropna().values
 
-        if len(gnn_vals) == 0 and len(center_vals) == 0:
+        if len(m1_vals) == 0 and len(m2_vals) == 0:
             continue
 
-        data.append(center_vals)
-        data.append(gnn_vals)
-
-        temp1= parameter_keys[m][0]
-        temp = parameter_keys[m][1]
-        gnn_mean = gnn_vals.mean()
-        gnn_sd = gnn_vals.std()
-        center_mean = center_vals.mean()
-        center_sd = center_vals.std()
+        data.append(m2_vals)
+        data.append(m1_vals)
 
         positions.append(pos)
         positions.append(pos + pair_spacing)
@@ -185,9 +262,9 @@ def _plot_group(df, parameter_keys, save_path, title):
     # --- покраска ---
     for i, patch in enumerate(box["boxes"]):
         if i % 2 == 0:
-            patch.set_facecolor("#DD8452")  # Center
+            patch.set_facecolor("#DD8452")  # method2
         else:
-            patch.set_facecolor("#4C72B0")  # GNN
+            patch.set_facecolor("#4C72B0")  # method1
 
     # --- разделительные линии ---
     for sep in separator_positions[:-1]:
@@ -195,8 +272,8 @@ def _plot_group(df, parameter_keys, save_path, title):
 
     # --- легенда ---
     legend_elements = [
-        Patch(facecolor="#DD8452", label="Center of mass"),
-        Patch(facecolor="#4C72B0", label="GNN")
+        Patch(facecolor="#DD8452", label=method2_label),
+        Patch(facecolor="#4C72B0", label=method1_label)
     ]
     ax.legend(handles=legend_elements)
 
@@ -212,7 +289,9 @@ def _plot_group(df, parameter_keys, save_path, title):
     plt.close()
 
 
-def creat_box_plot(result_path, file_name):
+def creat_box_plot(result_path, file_name,
+                   method1_col="abs_err_gnn", method2_col="abs_err_center",
+                   method1_label="GNN", method2_label="Center of mass"):
     data_file_path = os.path.join(result_path, file_name)
     plot_length_img_path = os.path.join(result_path, 'boxplot_length.png')
     plot_angle_img_path = os.path.join(result_path, 'boxplot_angle.png')
@@ -266,27 +345,33 @@ def creat_box_plot(result_path, file_name):
         'RL_angle', 'RN_angle', 'LN_angle', 'BR_C_plane_angle'
     ]
 
-    _save_combined_mean_sd(df, angle_list, angle_mean_txt_path)
+    aggregated_table_path = os.path.join(result_path, "table_aggregated.png")
+    aggregated_txt_path = os.path.join(result_path, "table_aggregated.txt")
 
-    _plot_group(df,
-                length_par_dict,
-                plot_length_img_path,
-               "MAE, mm")
+    _save_combined_mean_sd(df, angle_list, angle_mean_txt_path,
+                           method1_col, method2_col, method1_label, method2_label)
 
-    _plot_group(df,
-                angle_par_dict,
-                plot_angle_img_path,
-               "MAE, °")
+    _plot_group(df, length_par_dict, plot_length_img_path, "MAE, mm",
+                method1_col, method2_col, method1_label, method2_label)
+
+    _plot_group(df, angle_par_dict, plot_angle_img_path, "MAE, °",
+                method1_col, method2_col, method1_label, method2_label)
 
     _create_summary_table_plot(df, length_par_dict,
-                               length_table_path,
-                               length_txt_path,
-                               "Length Measurements")
+                               length_table_path, length_txt_path, "Length Measurements",
+                               method1_col, method2_col, method1_label, method2_label)
 
     _create_summary_table_plot(df, angle_par_dict,
-                               angle_table_path,
-                               angle_txt_path,
-                               "Angle Measurements")
+                               angle_table_path, angle_txt_path, "Angle Measurements",
+                               method1_col, method2_col, method1_label, method2_label)
+
+    aggregated_groups = {
+        "Length measurements": list(length_par_dict.keys()),
+        "Angle measurements": list(angle_par_dict.keys()),
+    }
+    _create_aggregated_norm_table(df, aggregated_groups,
+                                   aggregated_table_path, aggregated_txt_path,
+                                   method1_col, method2_col, method1_label, method2_label)
 
 if __name__ == "__main__":
 
