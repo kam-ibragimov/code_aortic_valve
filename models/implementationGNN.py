@@ -18,6 +18,7 @@ from models.landmarking_heart import landmarking_computeMeasurements_simplified
 import time
 from textwrap import indent
 from scipy.ndimage import center_of_mass
+from plots_data.plots import creat_box_plot
 
 matplotlib.use("Agg")
 
@@ -1374,6 +1375,8 @@ class MorphoGCN_Trainer:
             measurements=None,  # or a subset list like ["IC_R","IC_L"]
             jitter=0.05  # small jitter helps if points overlap
         )
+
+        creat_box_plot(result_folder, "gnn_vs_center_comparison.csv")
 
 
 class nnUnet_CandidatePointGenerator:
