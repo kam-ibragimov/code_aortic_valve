@@ -6,40 +6,51 @@ from pathlib import Path
 from data_preprocessing.text_worker import add_info_logging
 from models.landmarking_heart import landmarking_computeMeasurements_simplified
 from models.implementationGNN import MorphoGCN_Trainer, nnUnet_CandidatePointGenerator
+from models.robustness_noise import CandidateRobustness
+from plots_data.plots import plot_robustness_noise
 
 
 class GNNProject:
+
+    # Minimum distance between candidate points (in mm)..
+    MIN_DIST_GNN = 1.0
+    MIN_DIST_SIMPLE = 1.0
 
     def __init__(self, result_6_nnunet_folder, gnn_folder, train_test_lists):
         self.result_6_nnunet_folder = result_6_nnunet_folder
         self.gnn_folder = gnn_folder
         self.train_test_lists = train_test_lists
 
-    def landmark_nnUnet_generateCandidates(self):
-        if os.path.isfile(self.gnn_folder + '/landmark_candidates.json'):
-            pass
-        else:
+    def landmark_nnUnet_generateCandidates(self, min_dist=None, output_filename='landmark_candidates.json'):
+        if min_dist is None:
+            min_dist = self.MIN_DIST_GNN
+        output_path = os.path.join(self.gnn_folder, output_filename)
+        if not os.path.isfile(output_path):
             extractor = nnUnet_CandidatePointGenerator(
-                json_path = self.result_6_nnunet_folder + '/dataset.json',
-                n_candidates = 5,
-                min_dist = 1,
-                threshold = 0.15,
-                include_com = True
+                json_path=self.result_6_nnunet_folder + '/dataset.json',
+                n_candidates=5,
+                min_dist=min_dist,
+                threshold=0.15,
+                include_com=True
             )
             results = extractor.extract_candidate_points(self.result_6_nnunet_folder)
-            # save to JSON
-            extractor.save_results(results, self.gnn_folder + '/landmark_candidates.json')
+            extractor.save_results(results, output_path)
 
     def landmark_GNN_train(self):
         measurment_tester = MorphoGCN_Trainer(landmarking_computeMeasurements_simplified.get_measurement_names())
         measurment_tester.train_morpho_gcn2(self.gnn_folder, self.gnn_folder + '/data/training')
 
-    def landmark_GNN_test(self):
+    def landmark_GNN_test(self, mae_length_threshold=None, max_retries=5):
+        self.landmark_nnUnet_generateCandidates(
+            min_dist=self.MIN_DIST_SIMPLE,
+            output_filename='landmark_candidates_simple.json'
+        )
         measurment_tester = MorphoGCN_Trainer(landmarking_computeMeasurements_simplified.get_measurement_names())
-        # tester1.test_morpho_gcn_nnUnet(heart_GNN, heart_GNN + '/data/testing', heart_nnUnet + '/Landmarking/temp/landmark_candidates.json')
         measurment_tester.compare_gnn_vs_center(self.gnn_folder, self.gnn_folder + '/data/testing',
                                                 self.gnn_folder + '/landmark_candidates.json',
-                                                self.gnn_folder + '/results/')
+                                                self.gnn_folder + '/results/',
+                                                mae_length_threshold=mae_length_threshold,
+                                                max_retries=max_retries)
 
     def configure_folder(self, json_info_folder):
         def _clear_folder(folder):
@@ -86,7 +97,8 @@ class GNNProject:
 
 
 def process_gnn(result_6_nnunet_folder, gnn_folder, train_test_lists, json_info_folder, create_ds=False,
-                training_mod=False, testing_mod=False,):
+                training_mod=False, testing_mod=False,
+                mae_length_threshold=None, max_retries=5):
 
     gnn_worker = GNNProject(result_6_nnunet_folder=result_6_nnunet_folder,
                             gnn_folder=gnn_folder,
@@ -97,8 +109,74 @@ def process_gnn(result_6_nnunet_folder, gnn_folder, train_test_lists, json_info_
     if training_mod:
         gnn_worker.landmark_GNN_train()
     if testing_mod:
-        gnn_worker.landmark_GNN_test()
+        gnn_worker.landmark_GNN_test(mae_length_threshold=mae_length_threshold,
+                                     max_retries=max_retries)
     print('Hi')
+
+
+def process_gnn_robustness(gnn_folder, result_folder,
+                           sigma_grid=None, p_grid=None, n_seeds=None):
+    sweep_csv = os.path.join(result_folder, "robustness_noise_sweep.csv")
+
+    if not os.path.exists(sweep_csv):
+        candidates_json = os.path.join(gnn_folder, "landmark_candidates.json")
+        testing_folder = os.path.join(gnn_folder, "data", "testing")
+
+        robustness = CandidateRobustness()
+        robustness.run_sweep(
+            model_folder=gnn_folder,
+            reference_landmark_folders=testing_folder,
+            candidates_json_path=candidates_json,
+            result_folder=result_folder,
+            sigma_grid=sigma_grid,
+            p_grid=p_grid,
+            n_seeds=n_seeds,
+        )
+
+    plot_robustness_noise(robustness_folder=result_folder)
+
+
+def process_gnn_post_analysis(gnn_folder, gnn_interobserver_folder, json_info_folder,
+                               interobserver_txt_folder,
+                               ablation_mod=True, interobserver_mod=True, robustness_mod=True):
+    """
+    Run post-training GNN analyses. Each sub-step is guarded by a data check:
+    if required files are missing the step is skipped with a warning instead of crashing.
+    """
+    if ablation_mod:
+        candidates_simple = os.path.join(gnn_folder, "landmark_candidates_simple.json")
+        gnn_results_csv = os.path.join(gnn_folder, "results", "gnn_vs_center_comparison.csv")
+        missing = [p for p in [candidates_simple, gnn_results_csv] if not os.path.isfile(p)]
+        if missing:
+            print(f"[post_analysis:ablation] Skipping — missing files: {missing}")
+        else:
+            trainer = MorphoGCN_Trainer(landmarking_computeMeasurements_simplified.get_measurement_names())
+            trainer.run_ablation_from_csv(
+                gnn_results_csv=gnn_results_csv,
+                ablation_candidates_json_file=candidates_simple,
+                ablation_result_folder=os.path.join(gnn_folder, "results_ablation") + "/"
+            )
+
+    if interobserver_mod:
+        set1 = os.path.join(interobserver_txt_folder, "1 set")
+        set2 = os.path.join(interobserver_txt_folder, "2 set")
+        has_set1 = os.path.isdir(set1) and any(Path(set1).glob("*.txt"))
+        has_set2 = os.path.isdir(set2) and any(Path(set2).glob("*.txt"))
+        if not (has_set1 and has_set2):
+            print(f"[post_analysis:interobserver] Skipping — txt files not found at {interobserver_txt_folder}")
+        else:
+            process_gnn_interobserver(gnn_folder=gnn_interobserver_folder,
+                                       json_info_folder=json_info_folder,
+                                       interobserver_txt_folder=interobserver_txt_folder,
+                                       create_ds=True, testing_mod=True)
+
+    if robustness_mod:
+        candidates_json = os.path.join(gnn_folder, "landmark_candidates.json")
+        if not os.path.isfile(candidates_json):
+            print(f"[post_analysis:robustness] Skipping — landmark_candidates.json not found at {gnn_folder}")
+        else:
+            process_gnn_robustness(gnn_folder=gnn_folder,
+                                   result_folder=os.path.join(gnn_folder, "robustness_noise"))
 
 
 class GNNInterobserverProject:

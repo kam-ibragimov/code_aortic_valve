@@ -27,7 +27,7 @@ export_predicted_case_points: true
 extract_2d_slices: true
 find_and_create_mask_gh_landmark: true
 find_geometric_heights: true
-gnn_interobserver_study: true
+gnn_metrics_post_analysis: true
 gnn_metrics_train_test: true
 json_landmarks_mask_coord: true
 mask_6_landmarks: true

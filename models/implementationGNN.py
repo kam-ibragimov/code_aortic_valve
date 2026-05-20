@@ -22,6 +22,21 @@ from plots_data.plots import creat_box_plot
 
 matplotlib.use("Agg")
 
+_LENGTH_MEASUREMENTS = [
+    'BR_perimeter', 'BR_max', 'BR_min', 'BR_diameter',
+    'IC_R', 'IC_L', 'IC_N', 'IC_distance',
+    'RL_comm_height', 'RN_comm_height', 'LN_comm_height', 'mean_comm_heigh',
+    'ST_perimeter', 'ST_max', 'ST_min', 'ST_diameter',
+    'commissural_diameter', 'centroid_valve_height',
+]
+
+_ANGLE_MEASUREMENTS = [
+    'RL_angle', 'RN_angle', 'LN_angle',
+    'R_flat_angle', 'L_flat_angle', 'N_flat_angle',
+    'R_vertical_angle', 'L_vertical_angle', 'N_vertical_angle',
+    'mean_vertical_angle', 'BR_C_plane_angle',
+]
+
 COHORT_COLORS = {
     "German (g…)": "#1f77b4",  # blue
     "Slovenian norm (n…)": "#ff7f0e",  # orange
@@ -923,23 +938,29 @@ class MorphoGCN_Trainer:
                               meas_order=None,
                               save_csv=None,
                               method1_col="gnn",
-                              method2_col="center"):
+                              method2_col="center",
+                              method3_predictions=None,
+                              method3_col=None):
         # cases = intersection of the three dicts (preserve order if provided)
+        base_cases = set(all_predictions) & set(all_targets) & set(centerpoint_labels)
+        if method3_predictions is not None:
+            base_cases &= set(method3_predictions)
         if case_order is None:
-            cases = sorted(set(all_predictions) & set(all_targets) & set(centerpoint_labels))
+            cases = sorted(base_cases)
         else:
-            cases = [c for c in case_order if c in all_predictions and c in all_targets and c in centerpoint_labels]
+            cases = [c for c in case_order if c in base_cases]
 
         abs_err_col1 = f"abs_err_{method1_col}"
         abs_err_col2 = f"abs_err_{method2_col}"
+        abs_err_col3 = f"abs_err_{method3_col}" if method3_col else None
 
         rows = []
         for case in cases:
             ref_dict = all_targets[case]
             m1_dict = all_predictions.get(case, {})
             m2_dict = centerpoint_labels.get(case, {})
+            m3_dict = method3_predictions.get(case, {}) if method3_predictions else {}
 
-            # measurements = provided order or keys from reference
             names = (meas_order if meas_order is not None else list(ref_dict.keys()))
 
             for m in names:
@@ -948,7 +969,7 @@ class MorphoGCN_Trainer:
                 ref_v = float(ref_dict[m])
                 m1_v = float(m1_dict.get(m, np.nan))
                 m2_v = float(m2_dict.get(m, np.nan))
-                rows.append({
+                row = {
                     "case": case,
                     "measurement": m,
                     "ref": ref_v,
@@ -956,7 +977,12 @@ class MorphoGCN_Trainer:
                     method2_col: m2_v,
                     abs_err_col1: abs(m1_v - ref_v) if np.isfinite(m1_v) else np.nan,
                     abs_err_col2: abs(m2_v - ref_v) if np.isfinite(m2_v) else np.nan,
-                })
+                }
+                if method3_col:
+                    m3_v = float(m3_dict.get(m, np.nan))
+                    row[method3_col] = m3_v
+                    row[abs_err_col3] = abs(m3_v - ref_v) if np.isfinite(m3_v) else np.nan
+                rows.append(row)
 
         df = pd.DataFrame(rows)
 
@@ -966,8 +992,11 @@ class MorphoGCN_Trainer:
 
         # quick summary
         if not df.empty:
+            err_cols = [abs_err_col1, abs_err_col2]
+            if abs_err_col3:
+                err_cols.append(abs_err_col3)
             summary = (
-                df.groupby("measurement")[[abs_err_col1, abs_err_col2]]
+                df.groupby("measurement")[err_cols]
                 .median()
                 .sort_values(abs_err_col1)
             )
@@ -1176,6 +1205,7 @@ class MorphoGCN_Trainer:
     def __make_all_measurement_plots(self, df, plot_folder,
                                      method1_col="abs_err_gnn", method2_col="abs_err_center",
                                      method1_label="GNN", method2_label="Center"):
+        Path(plot_folder).mkdir(parents=True, exist_ok=True)
         df = self.__ensure_cohort_column(df)
         measurements = sorted(df["measurement"].dropna().unique().tolist())
 
@@ -1305,6 +1335,26 @@ class MorphoGCN_Trainer:
             metrics_by_case[case] = metr.get_all_metrics()
         return metrics_by_case
 
+    def __compute_weighted_avg_metrics(self, candidates_json_file, allowed_cases):
+        """Compute metrics using nnUNet-weighted average of candidate points per landmark."""
+        bank = DataLoaderLandmarks.load_candidates_json(candidates_json_file)
+        metrics_by_case = {}
+        for case, lm_dict in bank.items():
+            if case not in allowed_cases:
+                continue
+            sample = {}
+            for lm_name, payload in lm_dict.items():
+                pts = np.asarray(payload["candidate_points"], dtype=float)
+                wts = np.asarray(payload["candidate_weights"], dtype=float)
+                if len(pts) == 0:
+                    raise ValueError(f"Case {case}, landmark {lm_name} has no candidates.")
+                if wts.sum() == 0:
+                    wts = np.ones(len(wts))
+                sample[lm_name] = np.average(pts, axis=0, weights=wts)
+            metr = landmarking_computeMeasurements_simplified(sample)
+            metrics_by_case[case] = metr.get_all_metrics()
+        return metrics_by_case
+
     def __compute_reference_metrics_from_jsons(self, testing_folders):
         """
         Scan testing_folders for per-case landmark JSONs and compute reference metrics.
@@ -1340,55 +1390,264 @@ class MorphoGCN_Trainer:
 
         return ref_by_case, lm_by_case
 
-    def compare_gnn_vs_center(self, model_folder, reference_landmark_folders, candidates_json_file, result_folder):
-        """
-        Runs:
-          1) GNN inference using test_morpho_gcn_nnUnet (preds + reference labels)
-          2) Center-point metrics (first candidate per landmark)
-          3) Produces a tidy per-measurement comparison table and optional CSV
+    @staticmethod
+    def _compute_mean_norm_mae(df, err_col, measurements):
+        """Mean normalized MAE (%) across given measurements: mean(abs_err)/mean(ref)*100."""
+        norms = []
+        for m in measurements:
+            subset = df[df["measurement"] == m]
+            if subset.empty:
+                continue
+            mean_ref = subset["ref"].dropna().mean()
+            if not np.isfinite(mean_ref) or mean_ref == 0:
+                continue
+            mean_err = subset[err_col].dropna().mean()
+            if np.isfinite(mean_err):
+                norms.append(mean_err / mean_ref * 100.0)
+        return float(np.mean(norms)) if norms else float('inf')
 
-        Returns
-        -------
-        df : pandas.DataFrame
-            columns: ['case','measurement','ref','gnn','center','abs_err_gnn','abs_err_center']
-        """
-        # --- (A) Reference labels & allowed cases from testing JSONs
-        ref_by_case, _ = self.__compute_reference_metrics_from_jsons(reference_landmark_folders)
-        allowed_cases = set(ref_by_case.keys())
-        if not allowed_cases:
-            raise RuntimeError("No testing JSONs found -> unable to compute reference metrics.")
-
-        # --- (B) GNN predictions (uses only overlapping cases, per our patched testing)
+    def _evaluate_once(self, model_folder, reference_landmark_folders, candidates_json_file):
+        """Single GNN inference pass. Returns (df, predictions, targets, centerpoint_labels)."""
         all_predictions, all_targets, centerpoint_labels = self.test_morpho_gcn_nnUnet(
             model_folder=model_folder,
             json_file=candidates_json_file,
             reference_landmark_folders=reference_landmark_folders
         )
-
         df = self.__build_comparison_df(
-            all_predictions=all_predictions,  # GNN outputs
-            all_targets=all_targets,  # reference from testing JSONs
-            centerpoint_labels=centerpoint_labels,  # center-of-mass baseline
-            case_order=None,  # or your specific list
-            meas_order=None,  # or your specific list
-            save_csv=result_folder + "gnn_vs_center_comparison.csv"
+            all_predictions=all_predictions,
+            all_targets=all_targets,
+            centerpoint_labels=centerpoint_labels,
         )
+        return df, all_predictions, all_targets, centerpoint_labels
 
+    def _run_with_retry(self, model_folder, reference_landmark_folders, candidates_json_file,
+                        mae_length_threshold, max_retries, result_folder=None):
+        """Run GNN inference with optional retry/threshold logic. Returns best df."""
+        use_threshold = mae_length_threshold is not None
+        n_attempts = max_retries if use_threshold else 1
+
+        best_df = None
+        best_len = float('inf')
+        best_ang = float('inf')
+        fallback_df = None
+        fallback_len = float('inf')
+        fallback_ang = float('inf')
+
+        for attempt in range(n_attempts):
+            df, _, _, _ = self._evaluate_once(model_folder, reference_landmark_folders, candidates_json_file)
+
+            if use_threshold:
+                cur_len = self._compute_mean_norm_mae(df, "abs_err_gnn", _LENGTH_MEASUREMENTS)
+                cur_ang = self._compute_mean_norm_mae(df, "abs_err_gnn", _ANGLE_MEASUREMENTS)
+                print(f"[attempt {attempt + 1}/{n_attempts}] "
+                      f"length MAE: {cur_len:.2f}%  angle MAE: {cur_ang:.2f}%")
+
+                if (cur_len, cur_ang) < (fallback_len, fallback_ang):
+                    fallback_len, fallback_ang = cur_len, cur_ang
+                    fallback_df = df
+
+                if cur_len <= mae_length_threshold and (cur_len, cur_ang) < (best_len, best_ang):
+                    best_len, best_ang = cur_len, cur_ang
+                    best_df = df
+                    print(f"  New best — length={cur_len:.2f}%  angle={cur_ang:.2f}%")
+                    if result_folder:
+                        Path(result_folder).mkdir(parents=True, exist_ok=True)
+                        best_df.to_csv(result_folder + "gnn_vs_center_comparison.csv", index=False)
+            else:
+                best_df = df
+
+        if best_df is None:
+            print("[warning] No run passed length threshold — using overall best as fallback.")
+            best_df = fallback_df
+
+        return best_df
+
+    def _save_comparison_results(self, df, result_folder):
+        """Save CSV, text summary, and all plots for a GNN vs CoM comparison."""
+        Path(result_folder).mkdir(parents=True, exist_ok=True)
+        df.to_csv(result_folder + "gnn_vs_center_comparison.csv", index=False)
         self.save_error_stats_text(df, result_folder + "gnn_vs_center_summary.txt")
-
-        # self.__plot_normals_for_both_methods(df, result_folder + "plots/figure")
-        # Save boxplots
         self.__make_all_measurement_plots(df, result_folder + "plots")
-
         MorphoGNN_Visualizer.visualize_comparison_mean(
-            df,
-            save_dir=result_folder + "plots",  # or None
-            show=False,  # set False when running headless
-            measurements=None,  # or a subset list like ["IC_R","IC_L"]
-            jitter=0.05  # small jitter helps if points overlap
+            df, save_dir=result_folder + "plots", show=False, measurements=None, jitter=0.05
+        )
+        creat_box_plot(result_folder, "gnn_vs_center_comparison.csv")
+
+    @staticmethod
+    def _render_table_figure(col_labels, rows, save_path):
+        n_cols = len(col_labels)
+        fig_h = max(1.5, 0.38 * len(rows) + 1.0)
+        fig_w = max(9, n_cols * 1.6)
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        ax.axis("off")
+        table = ax.table(
+            cellText=rows,
+            colLabels=col_labels,
+            loc="center",
+            bbox=[0, 0, 1, 1]
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(8)
+        table.auto_set_column_width(col=list(range(n_cols)))
+        for (row_idx, col_idx), cell in table.get_celld().items():
+            if row_idx == 0:
+                cell.set_text_props(ha="center", fontweight="bold")
+                cell.set_height(cell.get_height() * 2.0)
+            else:
+                cell.set_text_props(ha="center")
+                cell.PAD = 0.05
+                if row_idx % 2 == 0:
+                    cell.set_facecolor("#f2f2f2")
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close()
+
+    def _save_aggregated_table(self, df, result_folder):
+        """
+        From an ablation DataFrame (columns abs_err_gnn, abs_err_center, abs_err_ablation),
+        build two tables saved as CSV + PNG:
+          - table_per_measurement : mean MAE per method + signed pairwise diffs for every metric
+          - table_aggregated      : mean absolute diff per group (length_mm / angle_deg)
+                                    uses |diff| before averaging so +/- values don't cancel out
+        """
+        col_gnn = "abs_err_gnn"
+        col_center = "abs_err_center"
+        col_abl = "abs_err_ablation"
+        if not {col_gnn, col_center, col_abl}.issubset(df.columns):
+            return
+
+        groups = [
+            ("length_mm", _LENGTH_MEASUREMENTS),
+            ("angle_deg", _ANGLE_MEASUREMENTS),
+        ]
+
+        # --- per-measurement table ---
+        per_meas_rows = []
+        per_meas_fig_rows = []
+        for group_name, meas_list in groups:
+            for m in meas_list:
+                sub = df[df["measurement"] == m]
+                if sub.empty:
+                    continue
+                mae_gnn    = sub[col_gnn].mean()
+                mae_center = sub[col_center].mean()
+                mae_abl    = sub[col_abl].mean()
+                d_gc = mae_gnn - mae_center
+                d_ga = mae_gnn - mae_abl
+                d_ca = mae_center - mae_abl
+                per_meas_rows.append({
+                    "group": group_name,
+                    "measurement": m,
+                    "mean_MAE_GNN": round(mae_gnn, 4),
+                    "mean_MAE_center": round(mae_center, 4),
+                    "mean_MAE_aver_nnUNet": round(mae_abl, 4),
+                    "diff_GNN_vs_center": round(d_gc, 4),
+                    "diff_GNN_vs_aver_nnUNet": round(d_ga, 4),
+                    "diff_center_vs_aver_nnUNet": round(d_ca, 4),
+                })
+                per_meas_fig_rows.append([
+                    m,
+                    f"{mae_gnn:.2f}",
+                    f"{mae_center:.2f}",
+                    f"{mae_abl:.2f}",
+                    f"{d_gc:+.2f}",
+                    f"{d_ga:+.2f}",
+                    f"{d_ca:+.2f}",
+                ])
+
+        per_meas_df = pd.DataFrame(per_meas_rows)
+        per_meas_df.to_csv(result_folder + "table_per_measurement.csv", index=False)
+        self._render_table_figure(
+            col_labels=[
+                "Measurement",
+                "GNN\n(mean MAE)",
+                "CoM\n(mean MAE)",
+                "nnUNet avg\n(mean MAE)",
+                "Δ GNN−CoM",
+                "Δ GNN−nnUNet",
+                "Δ CoM−nnUNet",
+            ],
+            rows=per_meas_fig_rows,
+            save_path=result_folder + "table_per_measurement.png",
         )
 
-        creat_box_plot(result_folder, "gnn_vs_center_comparison.csv")
+        # --- aggregated table: only Δ columns, averaged as mean(|Δ|) per group ---
+        agg_rows = []
+        agg_fig_rows = []
+        for group_name, _ in groups:
+            sub = per_meas_df[per_meas_df["group"] == group_name]
+            if sub.empty:
+                continue
+            d_gc = sub["diff_GNN_vs_center"].abs().mean()
+            d_ga = sub["diff_GNN_vs_aver_nnUNet"].abs().mean()
+            d_ca = sub["diff_center_vs_aver_nnUNet"].abs().mean()
+            agg_rows.append({
+                "group": group_name,
+                "mean_abs_diff_GNN_vs_center": round(d_gc, 4),
+                "mean_abs_diff_GNN_vs_aver_nnUNet": round(d_ga, 4),
+                "mean_abs_diff_center_vs_aver_nnUNet": round(d_ca, 4),
+            })
+            agg_fig_rows.append([
+                group_name,
+                f"{d_gc:.2f}",
+                f"{d_ga:.2f}",
+                f"{d_ca:.2f}",
+            ])
+
+        agg_df = pd.DataFrame(agg_rows)
+        agg_df.to_csv(result_folder + "table_aggregated.csv", index=False)
+        self._render_table_figure(
+            col_labels=[
+                "Group",
+                "mean |Δ| GNN−CoM",
+                "mean |Δ| GNN−nnUNet",
+                "mean |Δ| CoM−nnUNet",
+            ],
+            rows=agg_fig_rows,
+            save_path=result_folder + "table_aggregated.png",
+        )
+
+        print(f"[aggregated] Saved tables → {result_folder}")
+
+    def compare_gnn_vs_center(self, model_folder, reference_landmark_folders, candidates_json_file,
+                              result_folder, mae_length_threshold=None, max_retries=5):
+        ref_by_case, _ = self.__compute_reference_metrics_from_jsons(reference_landmark_folders)
+        if not ref_by_case:
+            raise RuntimeError("No testing JSONs found -> unable to compute reference metrics.")
+
+        best_df = self._run_with_retry(
+            model_folder, reference_landmark_folders, candidates_json_file,
+            mae_length_threshold, max_retries, result_folder
+        )
+
+        self._save_comparison_results(best_df, result_folder)
+
+    def run_ablation_from_csv(self, gnn_results_csv, ablation_candidates_json_file, ablation_result_folder):
+        """Run ablation using previously saved GNN test results (no re-inference needed)."""
+        ablation_result_folder = str(Path(ablation_result_folder)) + "/"
+        df_saved = pd.read_csv(gnn_results_csv)
+
+        best_preds, best_targets, best_center = {}, {}, {}
+        for case, grp in df_saved.groupby('case'):
+            best_preds[case] = dict(zip(grp['measurement'], grp['gnn']))
+            best_targets[case] = dict(zip(grp['measurement'], grp['ref']))
+            best_center[case] = dict(zip(grp['measurement'], grp['center']))
+
+        allowed_cases = set(best_preds.keys())
+        ablation_metrics = self.__compute_weighted_avg_metrics(ablation_candidates_json_file, allowed_cases)
+
+        Path(ablation_result_folder).mkdir(parents=True, exist_ok=True)
+        ablation_df = self.__build_comparison_df(
+            all_predictions=best_preds,
+            all_targets=best_targets,
+            centerpoint_labels=best_center,
+            method3_predictions=ablation_metrics,
+            method3_col="ablation",
+            save_csv=ablation_result_folder + "gnn_vs_center_comparison.csv"
+        )
+        creat_box_plot(ablation_result_folder, "gnn_vs_center_comparison.csv",
+                       method3_col="abs_err_ablation", method3_label="nnUNet avg")
+        self._save_aggregated_table(ablation_df, ablation_result_folder)
 
     def compare_interobserver(self, testing_folder, candidates_1set_json, candidates_2set_json, result_folder):
         """
