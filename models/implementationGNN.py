@@ -1899,16 +1899,13 @@ class nnUnet_CandidatePointGenerator:
             # exclusion set starts with the COM itself
             excl = [com_voxel.astype(int)]
 
-            # optionally add COM to output (only if it meets threshold and spacing vs itself is trivial)
+            # optionally add COM to output as first candidate (unconditionally — no threshold check)
             if include_center_in_output:
-                # if COM voxel is in candidates, add it first
-                # (if it isn't, we'll add the nearest candidate in the loop anyway)
-                if mask[tuple(com_voxel)]:
-                    selected.append(com_voxel.copy())
-                    svals.append(float(vol[tuple(com_voxel)]))
-                    excl.append(com_voxel.copy())  # already there, but explicit
-                    if len(selected) == want:
-                        return selected, svals
+                selected.append(com_voxel.copy())
+                svals.append(float(vol[tuple(com_voxel)]))
+                # COM already in excl, no need to add again
+                if len(selected) == want:
+                    return selected, svals
 
             for pt, v in zip(coords, vals):
                 # skip the COM voxel if we already added it and it's the same
@@ -1965,7 +1962,8 @@ class nnUnet_CandidatePointGenerator:
         result = {}
         for c in range(C):
             p = probs[c].astype(np.float32, copy = False)
-            coords, prob = self.__find_peaks_center_greedy(p, self.n_candidates, self.min_dist, resolution)
+            coords, prob = self.__find_peaks_center_greedy(p, self.n_candidates, self.min_dist, resolution,
+                                                          include_center_in_output=self.include_com)
             result[self.landmark_names[self.landmark_ids[c] - 1]] = {}
             result[self.landmark_names[self.landmark_ids[c] - 1]]['candidate_points'] = coords * np.asarray(resolution[::-1]) + origin[::-1]
             #result[self.landmark_names[self.landmark_ids[c] - 1]]['candidate_points'] = result[self.landmark_names[self.landmark_ids[c] - 1]]['candidate_points'][:, ::-1]

@@ -580,17 +580,23 @@ def controller(data_path, cpus):
         result_nnunet_landmarks_folder = os.path.join(nnUNet_folder, "nnUNet_test", f"Dataset{num}_{name}")
         process_gnn(result_6_nnunet_folder=result_nnunet_landmarks_folder, gnn_folder=gnn_folder,
                     train_test_lists=train_test_lists, json_info_folder=json_info_folder,
-                    create_ds=False, training_mod=False, testing_mod=True,
-                    max_retries=1)
+                    create_ds=True, training_mod=True, testing_mod=True,
+                    max_retries=1, include_com=True)
         controller_dump["gnn_metrics_train_test"] = True
         yaml_save(controller_dump, controller_path)
 
     if not controller_dump.get("gnn_metrics_post_analysis"):
+        num = controller_dump["number_6_landmarks"]
+        name = controller_dump["name_6_landmarks"]
+        result_nnunet_landmarks_folder = os.path.join(nnUNet_folder, "nnUNet_test", f"Dataset{num}_{name}")
         process_gnn_post_analysis(
             gnn_folder=gnn_folder,
             gnn_interobserver_folder=gnn_interobserver_folder,
             json_info_folder=json_info_folder,
             interobserver_txt_folder=interobserver_txt_points_folder,
+            result_6_nnunet_folder=result_nnunet_landmarks_folder,
+            train_test_lists=train_test_lists,
+            include_com=True,
             ablation_mod=True,
             interobserver_mod=True,
             robustness_mod=True,

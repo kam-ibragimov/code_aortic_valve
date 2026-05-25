@@ -21,7 +21,8 @@ class GNNProject:
         self.gnn_folder = gnn_folder
         self.train_test_lists = train_test_lists
 
-    def landmark_nnUnet_generateCandidates(self, min_dist=None, output_filename='landmark_candidates.json'):
+    def landmark_nnUnet_generateCandidates(self, min_dist=None, output_filename='landmark_candidates.json',
+                                           include_com=True):
         if min_dist is None:
             min_dist = self.MIN_DIST_GNN
         output_path = os.path.join(self.gnn_folder, output_filename)
@@ -31,7 +32,7 @@ class GNNProject:
                 n_candidates=5,
                 min_dist=min_dist,
                 threshold=0.15,
-                include_com=True
+                include_com=include_com
             )
             results = extractor.extract_candidate_points(self.result_6_nnunet_folder)
             extractor.save_results(results, output_path)
@@ -41,10 +42,6 @@ class GNNProject:
         measurment_tester.train_morpho_gcn2(self.gnn_folder, self.gnn_folder + '/data/training')
 
     def landmark_GNN_test(self, mae_length_threshold=None, max_retries=5):
-        self.landmark_nnUnet_generateCandidates(
-            min_dist=self.MIN_DIST_SIMPLE,
-            output_filename='landmark_candidates_simple.json'
-        )
         measurment_tester = MorphoGCN_Trainer(landmarking_computeMeasurements_simplified.get_measurement_names())
         measurment_tester.compare_gnn_vs_center(self.gnn_folder, self.gnn_folder + '/data/testing',
                                                 self.gnn_folder + '/landmark_candidates.json',
@@ -56,7 +53,7 @@ class GNNProject:
         def _clear_folder(folder):
             """Очищает папку, удаляя все файлы и подпапки"""
             if not folder.exists():
-                add_info_logging(f"Folder '{str(folder)}' does not exist.", "work_logger")
+                folder.mkdir(parents=True, exist_ok=True)
                 return
 
             for item in folder.iterdir():
@@ -98,14 +95,14 @@ class GNNProject:
 
 def process_gnn(result_6_nnunet_folder, gnn_folder, train_test_lists, json_info_folder, create_ds=False,
                 training_mod=False, testing_mod=False,
-                mae_length_threshold=None, max_retries=5):
+                mae_length_threshold=None, max_retries=5, include_com=True):
 
     gnn_worker = GNNProject(result_6_nnunet_folder=result_6_nnunet_folder,
                             gnn_folder=gnn_folder,
                             train_test_lists=train_test_lists)
     if create_ds:
         gnn_worker.configure_folder(json_info_folder=json_info_folder)
-        gnn_worker.landmark_nnUnet_generateCandidates()
+        gnn_worker.landmark_nnUnet_generateCandidates(include_com=include_com)
     if training_mod:
         gnn_worker.landmark_GNN_train()
     if testing_mod:
@@ -138,11 +135,21 @@ def process_gnn_robustness(gnn_folder, result_folder,
 
 def process_gnn_post_analysis(gnn_folder, gnn_interobserver_folder, json_info_folder,
                                interobserver_txt_folder,
+                               result_6_nnunet_folder=None, train_test_lists=None, include_com=True,
                                ablation_mod=True, interobserver_mod=True, robustness_mod=True):
     """
     Run post-training GNN analyses. Each sub-step is guarded by a data check:
     if required files are missing the step is skipped with a warning instead of crashing.
     """
+    if result_6_nnunet_folder is not None and train_test_lists is not None:
+        gnn_worker = GNNProject(result_6_nnunet_folder=result_6_nnunet_folder,
+                                gnn_folder=gnn_folder, train_test_lists=train_test_lists)
+        gnn_worker.landmark_nnUnet_generateCandidates(
+            min_dist=GNNProject.MIN_DIST_SIMPLE,
+            output_filename='landmark_candidates_simple.json',
+            include_com=include_com
+        )
+
     if ablation_mod:
         candidates_simple = os.path.join(gnn_folder, "landmark_candidates_simple.json")
         gnn_results_csv = os.path.join(gnn_folder, "results", "gnn_vs_center_comparison.csv")
