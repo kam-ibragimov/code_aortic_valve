@@ -47,16 +47,73 @@ def load_labels_mask_sitk(file_path, label):
     return mask_sitk
 
 
-def _sample_curve_points(vtk_curve, n_points):
-    pts = np.array([[vtk_curve.GetPoints().GetPoint(i)[j] for j in range(3)]
-                    for i in range(vtk_curve.GetNumberOfPoints())])
-    if len(pts) < 2:
-        return None
+def _vtk_to_numpy(vtk_curve):
+    return np.array([vtk_curve.GetPoints().GetPoint(i)
+                     for i in range(vtk_curve.GetNumberOfPoints())])
+
+
+def _resample_curve(pts, n_points):
     diffs = np.diff(pts, axis=0)
     cum_len = np.concatenate([[0], np.cumsum(np.linalg.norm(diffs, axis=1))])
     target = np.linspace(0, cum_len[-1], n_points)
     resampled = np.column_stack([np.interp(target, cum_len, pts[:, i]) for i in range(3)])
     return resampled.tolist()
+
+
+def _apply_bezier_anchor(pts, anchor_pt, blend_fraction):
+    """Replace the nearer endpoint tail with a cubic Bezier that lands exactly on anchor_pt.
+
+    Auto-detects which end (first or last point) is closer to the anchor,
+    flips the array if needed so the logic always works on the tail,
+    then flips back before returning.
+    """
+    anchor = np.array(anchor_pt, dtype=float)
+
+    dist0 = np.linalg.norm(pts[0] - anchor)
+    distn = np.linalg.norm(pts[-1] - anchor)
+    flip = dist0 < distn
+    if flip:
+        pts = pts[::-1].copy()
+
+    n = len(pts)
+    blend_idx = max(1, int(n * (1.0 - blend_fraction)))
+
+    # Stable tangent: average direction over a small window before blend_idx
+    window = max(3, int(n * 0.03))
+    tangent = pts[blend_idx] - pts[max(0, blend_idx - window)]
+    t_norm = np.linalg.norm(tangent)
+    if t_norm < 1e-9:
+        tangent = pts[-1] - pts[0]
+        t_norm = np.linalg.norm(tangent)
+    tangent = tangent / t_norm
+
+    P0, P3 = pts[blend_idx], anchor
+    dist = np.linalg.norm(P3 - P0)
+
+    # P1 continues the existing curve direction; P2 approaches anchor naturally
+    P1 = P0 + tangent * dist * 0.4
+    approach = P0 - P3
+    a_norm = np.linalg.norm(approach)
+    P2 = P3 + (approach / a_norm) * dist * 0.4 if a_norm > 1e-9 else P3
+
+    n_bez = max(20, n - blend_idx)
+    t = np.linspace(0, 1, n_bez)
+    bezier = (
+        ((1 - t) ** 3)[:, None] * P0
+        + 3 * ((1 - t) ** 2 * t)[:, None] * P1
+        + 3 * ((1 - t) * t ** 2)[:, None] * P2
+        + (t ** 3)[:, None] * P3
+    )
+
+    modified = np.vstack([pts[:blend_idx], bezier])
+    return modified[::-1].copy() if flip else modified
+
+
+def _sample_curve_points(vtk_curve, n_points):
+    pts = _vtk_to_numpy(vtk_curve)
+    if len(pts) < 2:
+        return None
+    return _resample_curve(pts, n_points)
 
 
 def curve_lines_analysis(data_path,
@@ -70,7 +127,9 @@ def curve_lines_analysis(data_path,
                          original_mask=False,
                          points2points=False,
                          curve2points=False,
-                         n_curve_points=None):
+                         n_curve_points=None,
+                         anchor_keys=None,
+                         blend_fraction=0.15):
 
     date_str = datetime.now().strftime("%d_%m_%y")
     result_folder_path = os.path.join(result_path, f"{folder_name}_{date_str}")
@@ -224,14 +283,25 @@ def curve_lines_analysis(data_path,
                         })
                         asd_metric.append(np.nan)
                         continue
-                    temp_metrics_2 = compute_metrics_gh_line_v2(dict_cases[case_name][keys_to_need[label]], vtk_curve_pred)
-                    asd_metric.append(temp_metrics_2["MPCD"])
+                    pts = _vtk_to_numpy(vtk_curve_pred)
+                    if len(pts) < 2:
+                        asd_metric.append(np.nan)
+                        continue
+                    if anchor_keys:
+                        label_name = keys_to_need[label]
+                        for anchor_key in anchor_keys.get(label_name, []):
+                            anchor_pt = dict_cases[case_name].get(anchor_key)
+                            if anchor_pt is not None:
+                                pts = _apply_bezier_anchor(pts, anchor_pt, blend_fraction)
+                    coord_org = dict_cases[case_name][keys_to_need[label]]
+                    distances = [np.sqrt(np.sum((pts - np.array(p)) ** 2, axis=1)).min()
+                                 for p in coord_org]
+                    asd_metric.append(float(np.mean(distances)))
                     if n_curve_points:
-                        sampled = _sample_curve_points(vtk_curve_pred, n_curve_points)
-                        if sampled is not None:
-                            if case_name not in predictions:
-                                predictions[case_name] = {}
-                            predictions[case_name][keys_to_need[label] + "_pred"] = sampled
+                        sampled = _resample_curve(pts, n_curve_points)
+                        if case_name not in predictions:
+                            predictions[case_name] = {}
+                        predictions[case_name][keys_to_need[label] + "_pred"] = sampled
                 metrics_2["case"] = case_name
                 metrics_2["group"] = first_char
                 asd_arr = np.array(asd_metric, dtype=float)

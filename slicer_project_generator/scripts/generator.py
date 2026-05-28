@@ -6,7 +6,7 @@ import SimpleITK as sitk
 from tkinter import messagebox, Tk
 from slicer_project_generator.scripts.utils import json_reader, json_save
 import re
-from data_postprocessing.controller_analysis import load_mask, load_labels_mask_sitk
+from data_postprocessing.controller_analysis import load_mask, load_labels_mask_sitk, _apply_bezier_anchor
 from data_postprocessing.mask_analysis import extract_boundary_curve_world
 from data_postprocessing.vtk_analysis import CenterlineExtractor
 
@@ -189,14 +189,30 @@ class ProjectGenerator:
         self.pred_aorta_mask_file = pred_aorta_mask_file
         self.gh_pred_data = None
 
-    def _curve_pred_data_generate(self, mask_file, keys, n_samples=20, spline_smoothing=0.1):
-        if not mask_file or not os.path.exists(mask_file):
-            return {}
+    def _curve_pred_data_generate(self, mask_file, keys, n_samples=20, spline_smoothing=0.1,
+                                   anchor_map=None, blend_fraction=0.15):
         result = {}
+        keys_to_compute = {}
+
+        for label, output_key in keys.items():
+            # e.g. 'RGH_p' -> 'RGH_pred' in dict_all_case
+            dict_key = output_key[:-2] + '_pred'
+            cached = self.case_data.get(dict_key)
+            if cached is not None:
+                result[output_key] = np.array(cached)
+            else:
+                keys_to_compute[label] = output_key
+
+        if not keys_to_compute:
+            return result
+
+        if not mask_file or not os.path.exists(mask_file):
+            return result
+
         masks_pred, levels_pred = load_mask(mask_file, False)
         vtk_curve_extractor = CenterlineExtractor(spline_smoothing=spline_smoothing)
         for label in range(1, levels_pred):
-            if label not in keys:
+            if label not in keys_to_compute:
                 continue
             mask_pred = (masks_pred == label).astype(np.uint8)
             mask_sitk = load_labels_mask_sitk(mask_file, label)
@@ -207,13 +223,23 @@ class ProjectGenerator:
                             for i in range(segments.GetNumberOfPoints())])
             if len(pts) < 2:
                 continue
+            output_key = keys_to_compute[label]
+            if anchor_map and output_key in anchor_map:
+                for anchor_case_key in anchor_map[output_key]:
+                    anchor_pt = self.case_data.get(anchor_case_key)
+                    if anchor_pt is not None:
+                        pts = _apply_bezier_anchor(pts, anchor_pt, blend_fraction)
             t = np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
             t /= t[-1]
             t_new = np.linspace(0, 1, n_samples)
-            result[keys[label]] = np.column_stack([np.interp(t_new, t, pts[:, i]) for i in range(3)])
+            result[output_key] = np.column_stack([np.interp(t_new, t, pts[:, i]) for i in range(3)])
         return result
 
     def _br_pred_data_generate(self, n_samples=20):
+        cached = self.case_data.get('BR_pred')
+        if cached is not None:
+            return {'BR_p': np.array(cached)}
+
         if not self.br_2d_pred_mask_file or not os.path.exists(self.br_2d_pred_mask_file):
             return {}
         mask_sitk = sitk.ReadImage(self.br_2d_pred_mask_file)
@@ -221,10 +247,8 @@ class ProjectGenerator:
         boundary_points = extract_boundary_curve_world(mask_array, mask_sitk)
         if len(boundary_points) < 4:
             return {}
-        # Remove duplicate endpoint if find_contours closed the contour
         if np.allclose(boundary_points[0], boundary_points[-1], atol=1e-3):
             boundary_points = boundary_points[:-1]
-        # endpoint=False: equal spacing without repeating start point at closure
         indices = np.round(np.linspace(0, len(boundary_points), n_samples, endpoint=False)).astype(int)
         indices = np.clip(indices, 0, len(boundary_points) - 1)
         return {'BR_p': boundary_points[indices]}
@@ -307,10 +331,17 @@ class ProjectGenerator:
         self.gh_pred_data = self._curve_pred_data_generate(
             self.gh_lines_pred_mask_file,
             {1: 'RGH_p', 2: 'LGH_p', 3: 'NGH_p'},
-            n_samples=10, spline_smoothing=1.0
+            n_samples=10, spline_smoothing=1.0,
+            anchor_map={'RGH_p': ['R_pred'], 'LGH_p': ['L_pred'], 'NGH_p': ['N_pred']},
+            blend_fraction=0.15
         )
         self.gh_pred_data.update(self._curve_pred_data_generate(
-            self.ci_lines_pred_mask_file, {1: 'RCI_p', 2: 'LCI_p', 3: 'NCI_p'}))
+            self.ci_lines_pred_mask_file, {1: 'RCI_p', 2: 'LCI_p', 3: 'NCI_p'},
+            anchor_map={'RCI_p': ['RLC_pred', 'RNC_pred'],
+                        'LCI_p': ['RLC_pred', 'LNC_pred'],
+                        'NCI_p': ['RNC_pred', 'LNC_pred']},
+            blend_fraction=0.08
+        ))
         self.gh_pred_data.update(self._br_pred_data_generate())
 
         case_folder_path = os.path.join(self.output_folder, self.case_name)

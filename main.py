@@ -808,7 +808,9 @@ def controller(data_path, cpus):
                                            spline_smoothing=0.5,
                                            probabilities_map=False, original_mask=True,
                                            points2points=False, curve2points=True,
-                                           n_curve_points=20)
+                                           n_curve_points=20,
+                                           anchor_keys={'RGH': ['R_pred'], 'LGH': ['L_pred'], 'NGH': ['N_pred']},
+                                           blend_fraction=0.15)
         if predictions:
             for case_name, pred_coords in predictions.items():
                 if case_name in dict_all_case:
@@ -826,7 +828,11 @@ def controller(data_path, cpus):
                                            spline_smoothing=0.1,
                                            probabilities_map=False, original_mask=True,
                                            points2points=False, curve2points=True,
-                                           n_curve_points=20)
+                                           n_curve_points=20,
+                                           anchor_keys={'RCI': ['RLC_pred', 'RNC_pred'],
+                                                        'LCI': ['RLC_pred', 'LNC_pred'],
+                                                        'NCI': ['RNC_pred', 'LNC_pred']},
+                                           blend_fraction=0.08)
         if predictions:
             for case_name, pred_coords in predictions.items():
                 if case_name in dict_all_case:
