@@ -1,6 +1,11 @@
+import os
+
 import numpy as np
+import pandas as pd
 import SimpleITK as sitk
 from pathlib import Path
+
+from data_preprocessing.text_worker import add_info_logging
 
 
 def get_oblique_plane_params(r, l, n):
@@ -202,3 +207,65 @@ def compute_br_plane_offset(br_points, r, l, n, t_threshold=2.5, min_offset_mm=0
     if t_stat > t_threshold and abs(mean_d) > min_offset_mm:
         return round(mean_d, 3)
     return 0.0
+
+
+def correct_br_points_to_plane(br_points, r, l, n):
+    """
+    Projects 'BR - closed' points onto the R/L/N plane if a systematic offset is detected.
+
+    Returns:
+        offset      : detected signed offset in mm (0.0 if no correction needed)
+        original    : copy of the original br_points
+        corrected   : points shifted by -offset along the plane normal
+    """
+    offset = compute_br_plane_offset(br_points, r=r, l=l, n=n)
+    original = [list(p) for p in br_points]
+    if offset == 0.0:
+        return offset, original, original
+    _, _, _, normal = get_oblique_plane_params(r, l, n)
+    corrected = [[p[0] - offset * normal[0],
+                  p[1] - offset * normal[1],
+                  p[2] - offset * normal[2]] for p in br_points]
+    return offset, original, corrected
+
+
+def process_br_plane_corrections(dict_all_case, result_folder):
+    """
+    Iterates over all cases, corrects 'BR - closed' points to the R/L/N plane,
+    saves per-case offsets to CSV, and logs a summary.
+
+    Modifies dict_all_case in-place:
+        - 'BR_org - closed' : original annotation backup
+        - 'BR - closed'     : corrected (projected) points
+        - 'BR - plane offset': detected offset in mm (0.0 if no correction)
+
+    Returns the modified dict_all_case.
+    """
+    offset_rows = []
+    for case_name, points_dict in dict_all_case.items():
+        if "BR - closed" not in points_dict:
+            continue
+        r, l, n = points_dict['R'][0], points_dict['L'][0], points_dict['N'][0]
+        offset, br_org, br_corrected = correct_br_points_to_plane(
+            points_dict["BR - closed"], r=r, l=l, n=n
+        )
+        dict_all_case[case_name]["BR - plane offset"] = offset
+        dict_all_case[case_name]["BR_org - closed"] = br_org
+        dict_all_case[case_name]["BR - closed"] = br_corrected
+        offset_rows.append({"case": case_name, "BR - plane offset": offset})
+
+    csv_path = os.path.join(result_folder, "br_plane_offset.csv")
+    if os.path.exists(csv_path):
+        os.remove(csv_path)
+    pd.DataFrame(offset_rows).to_csv(csv_path, index=False)
+
+    total = len(offset_rows)
+    shifted = sum(1 for row in offset_rows if row["BR - plane offset"] != 0.0)
+    if total > 0:
+        add_info_logging(
+            f"BR plane offset: {shifted}/{total} cases with non-zero offset "
+            f"({round(100 * shifted / total, 1)}%)",
+            "result_logger"
+        )
+
+    return dict_all_case

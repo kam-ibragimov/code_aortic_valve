@@ -27,7 +27,7 @@ from data_visualization.markers import (slices_with_markers, process_markers, fi
 from models.controller_nnUnet import process_nnunet
 from experiments.nnUnet_experiments import experiment_training
 from models.controller_GNN import process_gnn, process_gnn_post_analysis
-from data_preprocessing.oblique_slice_extractor import find_global_2d_size, extract_2d_slice_pair, compute_br_plane_offset
+from data_preprocessing.oblique_slice_extractor import find_global_2d_size, extract_2d_slice_pair, process_br_plane_corrections
 
 # from optimization.parallelization import division_processes
 
@@ -372,29 +372,7 @@ def controller(data_path, cpus):
         yaml_save(controller_dump, controller_path)
 
     if not controller_dump.get("br_plane_offset"):
-        offset_rows = []
-        for case_name, points_dict in dict_all_case.items():
-            if "BR - closed" not in points_dict:
-                continue
-            r, l, n = points_dict['R'][0], points_dict['L'][0], points_dict['N'][0]
-            offset = compute_br_plane_offset(points_dict["BR - closed"], r=r, l=l, n=n)
-            dict_all_case[case_name]["BR - plane offset"] = offset
-            offset_rows.append({"case": case_name, "BR - plane offset": offset})
-
-        csv_path = os.path.join(result_folder, "br_plane_offset.csv")
-        if os.path.exists(csv_path):
-            os.remove(csv_path)
-        pd.DataFrame(offset_rows).to_csv(csv_path, index=False)
-
-        total = len(offset_rows)
-        shifted = sum(1 for row in offset_rows if row["BR - plane offset"] != 0.0)
-        if total > 0:
-            add_info_logging(
-                f"BR plane offset: {shifted}/{total} cases with non-zero offset "
-                f"({round(100 * shifted / total, 1)}%)",
-                "result_logger"
-            )
-
+        dict_all_case = process_br_plane_corrections(dict_all_case, result_folder)
         json_save(dict_all_case, dict_all_case_path)
         controller_dump["br_plane_offset"] = True
         yaml_save(controller_dump, controller_path)
@@ -418,7 +396,7 @@ def controller(data_path, cpus):
         num = controller_dump["number_br_2d"]
         name = controller_dump["name_br_2d"]
         predictions = basal_ring_analysis(data_path, result_folder, folder_name=f"Dataset{num}_{name}",
-                                          dict_cases=dict_all_case, plane_offset_mode="key",
+                                          dict_cases=dict_all_case, plane_offset_mode="none",
                                           n_curve_points=20)
         if predictions:
             for case_name, pred_coords in predictions.items():
