@@ -18,3 +18,4 @@ pyvista
 pycpd
 scikit-image==0.21.0
 git+https://github.com/gasperpodobnik/MeshMetrics.git
+git+https://github.com/lbragimov/morpho-gcn.git

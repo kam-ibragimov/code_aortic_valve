@@ -5,14 +5,93 @@ import shutil
 from pathlib import Path
 from data_preprocessing.text_worker import add_info_logging
 from models.landmarking_heart import landmarking_computeMeasurements_simplified
-from models.implementationGNN import MorphoGCN_Trainer, nnUnet_CandidatePointGenerator
-from models.robustness_noise import CandidateRobustness
-from plots_data.plots import plot_robustness_noise
+from morpho_gcn import MorphoGCN_Trainer, nnUnet_CandidatePointGenerator, CandidateRobustness
+from plots_data.plots import creat_box_plot, plot_robustness_noise
 
+# ---------------------------------------------------------------------------
+# Project-specific configuration
+# ---------------------------------------------------------------------------
+
+_LANDMARK_NAMES = ["R", "L", "N", "RLC", "RNC", "LNC"]
+
+_COHORT_COLORS = {
+    "German (HOM…)": "#1f77b4",
+    "Slovenian norm (n…)": "#ff7f0e",
+    "Slovenian pathology (p…)": "#2ca02c",
+    "Other": "#7f7f7f",
+}
+
+_LENGTH_MEASUREMENTS = [
+    'BR_perimeter', 'BR_max', 'BR_min', 'BR_diameter',
+    'IC_R', 'IC_L', 'IC_N', 'IC_distance',
+    'RL_comm_height', 'RN_comm_height', 'LN_comm_height', 'mean_comm_heigh',
+    'ST_perimeter', 'ST_max', 'ST_min', 'ST_diameter',
+    'commissural_diameter', 'centroid_valve_height',
+]
+
+_ANGLE_MEASUREMENTS = [
+    'RL_angle', 'RN_angle', 'LN_angle',
+    'R_flat_angle', 'L_flat_angle', 'N_flat_angle',
+    'R_vertical_angle', 'L_vertical_angle', 'N_vertical_angle',
+    'mean_vertical_angle', 'BR_C_plane_angle',
+]
+
+_MEASUREMENT_GROUPS = {
+    "length_mm": _LENGTH_MEASUREMENTS,
+    "angle_deg": _ANGLE_MEASUREMENTS,
+}
+
+
+def _measurement_fn(landmarks):
+    return landmarking_computeMeasurements_simplified(landmarks).get_all_metrics()
+
+
+def _cohort_fn(case):
+    if case.startswith("HOM"):
+        return "German (HOM…)"
+    if case.startswith("n"):
+        return "Slovenian norm (n…)"
+    if case.startswith("p"):
+        return "Slovenian pathology (p…)"
+    return "Other"
+
+
+class _AorticMorphoGCN_Trainer(MorphoGCN_Trainer):
+    """Project adapter: adds creat_box_plot calls after core comparison methods."""
+
+    def _save_comparison_results(self, df, result_folder):
+        super()._save_comparison_results(df, result_folder)
+        creat_box_plot(result_folder, "gnn_vs_center_comparison.csv")
+
+    def run_ablation_from_csv(self, gnn_results_csv, ablation_candidates_json_file, ablation_result_folder):
+        super().run_ablation_from_csv(gnn_results_csv, ablation_candidates_json_file, ablation_result_folder)
+        creat_box_plot(ablation_result_folder, "gnn_vs_center_comparison.csv",
+                       method3_col="abs_err_ablation", method3_label="nnUNet avg")
+
+    def compare_interobserver(self, testing_folder, candidates_1set_json, candidates_2set_json, result_folder):
+        super().compare_interobserver(testing_folder, candidates_1set_json, candidates_2set_json, result_folder)
+        creat_box_plot(result_folder, "interobserver_comparison.csv",
+                       method1_col="abs_err_inter", method2_col="abs_err_intra",
+                       method1_label="Inter-observer", method2_label="Intra-observer")
+
+
+def _make_trainer():
+    return _AorticMorphoGCN_Trainer(
+        feature_names=landmarking_computeMeasurements_simplified.get_measurement_names(),
+        measurement_fn=_measurement_fn,
+        landmark_names=_LANDMARK_NAMES,
+        cohort_fn=_cohort_fn,
+        cohort_colors=_COHORT_COLORS,
+        measurement_groups=_MEASUREMENT_GROUPS,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Project classes
+# ---------------------------------------------------------------------------
 
 class GNNProject:
 
-    # Minimum distance between candidate points (in mm)..
     MIN_DIST_GNN = 1.0
     MIN_DIST_SIMPLE = 1.0
 
@@ -38,29 +117,27 @@ class GNNProject:
             extractor.save_results(results, output_path)
 
     def landmark_GNN_train(self):
-        measurment_tester = MorphoGCN_Trainer(landmarking_computeMeasurements_simplified.get_measurement_names())
-        measurment_tester.train_morpho_gcn2(self.gnn_folder, self.gnn_folder + '/data/training')
+        trainer = _make_trainer()
+        trainer.train_morpho_gcn2(self.gnn_folder, self.gnn_folder + '/data/training')
 
     def landmark_GNN_test(self, mae_length_threshold=None, max_retries=5):
-        measurment_tester = MorphoGCN_Trainer(landmarking_computeMeasurements_simplified.get_measurement_names())
-        measurment_tester.compare_gnn_vs_center(self.gnn_folder, self.gnn_folder + '/data/testing',
-                                                self.gnn_folder + '/landmark_candidates.json',
-                                                self.gnn_folder + '/results/',
-                                                mae_length_threshold=mae_length_threshold,
-                                                max_retries=max_retries)
+        trainer = _make_trainer()
+        trainer.compare_gnn_vs_center(self.gnn_folder, self.gnn_folder + '/data/testing',
+                                      self.gnn_folder + '/landmark_candidates.json',
+                                      self.gnn_folder + '/results/',
+                                      mae_length_threshold=mae_length_threshold,
+                                      max_retries=max_retries)
 
     def configure_folder(self, json_info_folder):
         def _clear_folder(folder):
-            """Очищает папку, удаляя все файлы и подпапки"""
             if not folder.exists():
                 folder.mkdir(parents=True, exist_ok=True)
                 return
-
             for item in folder.iterdir():
                 if item.is_file() or item.is_symlink():
-                    item.unlink()  # Удаляем файл или символическую ссылку
+                    item.unlink()
                 elif item.is_dir():
-                    shutil.rmtree(item)  # Удаляем папку рекурсивно
+                    shutil.rmtree(item)
 
         def _get_file_list(df, series_type, column, suffix, base_path):
             base_path = Path(base_path)
@@ -80,15 +157,8 @@ class GNNProject:
                 else:
                     shutil.copy(img_path, output_folder / img_path.name)
 
-        list_train_cases = _get_file_list(self.train_test_lists,
-                                         "train",
-                                         "case_name",
-                                         ".json",
-                                         json_info_folder)
-        list_test_cases = _get_file_list(self.train_test_lists,
-                                        "test"
-                                        , "case_name", ".json",
-                                        json_info_folder)
+        list_train_cases = _get_file_list(self.train_test_lists, "train", "case_name", ".json", json_info_folder)
+        list_test_cases = _get_file_list(self.train_test_lists, "test", "case_name", ".json", json_info_folder)
         _copy_img(list_train_cases, Path(self.gnn_folder) / "data" / "training")
         _copy_img(list_test_cases, Path(self.gnn_folder) / "data" / "testing")
 
@@ -106,8 +176,7 @@ def process_gnn(result_6_nnunet_folder, gnn_folder, train_test_lists, json_info_
     if training_mod:
         gnn_worker.landmark_GNN_train()
     if testing_mod:
-        gnn_worker.landmark_GNN_test(mae_length_threshold=mae_length_threshold,
-                                     max_retries=max_retries)
+        gnn_worker.landmark_GNN_test(mae_length_threshold=mae_length_threshold, max_retries=max_retries)
     print('Hi')
 
 
@@ -121,10 +190,12 @@ def process_gnn_robustness(gnn_folder, result_folder,
 
         robustness = CandidateRobustness()
         robustness.run_sweep(
+            trainer=_make_trainer(),
             model_folder=gnn_folder,
             reference_landmark_folders=testing_folder,
             candidates_json_path=candidates_json,
             result_folder=result_folder,
+            landmark_keys=_LANDMARK_NAMES,
             sigma_grid=sigma_grid,
             p_grid=p_grid,
             n_seeds=n_seeds,
@@ -137,10 +208,6 @@ def process_gnn_post_analysis(gnn_folder, gnn_interobserver_folder, json_info_fo
                                interobserver_txt_folder,
                                result_6_nnunet_folder=None, train_test_lists=None, include_com=True,
                                ablation_mod=True, interobserver_mod=True, robustness_mod=True):
-    """
-    Run post-training GNN analyses. Each sub-step is guarded by a data check:
-    if required files are missing the step is skipped with a warning instead of crashing.
-    """
     if result_6_nnunet_folder is not None and train_test_lists is not None:
         gnn_worker = GNNProject(result_6_nnunet_folder=result_6_nnunet_folder,
                                 gnn_folder=gnn_folder, train_test_lists=train_test_lists)
@@ -157,7 +224,7 @@ def process_gnn_post_analysis(gnn_folder, gnn_interobserver_folder, json_info_fo
         if missing:
             print(f"[post_analysis:ablation] Skipping — missing files: {missing}")
         else:
-            trainer = MorphoGCN_Trainer(landmarking_computeMeasurements_simplified.get_measurement_names())
+            trainer = _make_trainer()
             trainer.run_ablation_from_csv(
                 gnn_results_csv=gnn_results_csv,
                 ablation_candidates_json_file=candidates_simple,
@@ -194,7 +261,6 @@ class GNNInterobserverProject:
         self.gnn_folder = gnn_folder
 
     def _parse_interobserver_txt(self, filepath):
-        """Parse Point section from interobserver txt file (supports in/n/rn prefix formats)."""
         result = {}
         with open(filepath, 'r') as f:
             lines = [line.rstrip() for line in f]
@@ -220,29 +286,24 @@ class GNNInterobserverProject:
             if in_data and in_point:
                 if not stripped:
                     continue
-                # New subsection starts (single word ending with ":")
                 if stripped.endswith(':') and len(stripped.split()) == 1:
                     in_point = False
                     continue
                 parts = stripped.split()
-                # Skip header line (Name  X1  Y1  Z1) and parse only target landmarks
                 if parts and parts[0] in self.LANDMARK_KEYS and len(parts) >= 4:
                     result[parts[0]] = [float(parts[1]), float(parts[2]), float(parts[3])]
 
         return result
 
     def _get_case_number(self, filename):
-        """Extract numeric suffix from filename stem (e.g. 'in1' → '1', 'rn105' → '105')."""
         stem = Path(filename).stem
         m = re.search(r'\d+$', stem)
         return m.group() if m else None
 
     def configure_folder(self, json_info_folder, interobserver_txt_folder):
-        """Copy n-case JSONs to data/testing based on available interobserver txt files."""
         testing_folder = Path(self.gnn_folder) / "data" / "testing"
         testing_folder.mkdir(parents=True, exist_ok=True)
 
-        # Collect case numbers present in both sets
         set1_folder = Path(interobserver_txt_folder) / "1 set"
         set2_folder = Path(interobserver_txt_folder) / "2 set"
 
@@ -261,11 +322,6 @@ class GNNInterobserverProject:
                 add_info_logging(f"json_info: n{num}.json not found, skipping.", "work_logger")
 
     def generate_interobserver_candidates(self, interobserver_txt_folder):
-        """
-        Build landmark_candidates_1set.json (Inter-observer) and
-        landmark_candidates_2set.json (Intra-observer) from txt files.
-        Each landmark gets one candidate point with weight 1.0.
-        """
         set1_folder = Path(interobserver_txt_folder) / "1 set"
         set2_folder = Path(interobserver_txt_folder) / "2 set"
 
@@ -302,13 +358,12 @@ class GNNInterobserverProject:
                 json.dump(candidates, f, indent=2)
 
     def run_interobserver_test(self):
-        """Run inter-/intra-observer comparison against reference JSONs."""
-        measurment_tester = MorphoGCN_Trainer(landmarking_computeMeasurements_simplified.get_measurement_names())
+        trainer = _make_trainer()
         testing_folder = self.gnn_folder + '/data/testing'
         candidates_1set = self.gnn_folder + '/landmark_candidates_1set.json'
         candidates_2set = self.gnn_folder + '/landmark_candidates_2set.json'
         result_folder = self.gnn_folder + '/results/'
-        measurment_tester.compare_interobserver(testing_folder, candidates_1set, candidates_2set, result_folder)
+        trainer.compare_interobserver(testing_folder, candidates_1set, candidates_2set, result_folder)
 
 
 def process_gnn_interobserver(gnn_folder, json_info_folder, interobserver_txt_folder,
