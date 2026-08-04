@@ -15,6 +15,7 @@ create_train_test_lists: true
 crop_br_2d_size:
 - 154
 - 144
+crop_coverage_stats: true
 crop_images: true
 crop_img_size:
 - 180

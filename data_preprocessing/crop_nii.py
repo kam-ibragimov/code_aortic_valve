@@ -1,6 +1,11 @@
+import os
 import math
 import numpy as np
+import pandas as pd
 import SimpleITK as sitk
+
+from data_preprocessing.text_worker import add_info_logging
+from data_preprocessing.csv_worker import write_csv
 
 
 def find_global_size(image_paths, padding=16):
@@ -166,3 +171,64 @@ def fix_origin_cropped_image(cropped_image_path, mask_image_path, original_image
     cropped_image.SetOrigin(new_origin)
 
     sitk.WriteImage(cropped_image, output_image_path)
+
+
+def crop_coverage_statistics(image_folder, image_crop_folder, result_folder=None, file_ending=".nii.gz"):
+    """
+    Сравнивает объём (в вокселях) исходного изображения с объёмом того же
+    изображения после обрезки под единый global_size и считает, какая доля
+    исходной картинки была обрезана и больше не используется.
+
+    :param image_folder: папка с исходными (некроп­нутыми) изображениями.
+    :param image_crop_folder: папка с обрезанными изображениями (те же имена файлов).
+    :param result_folder: если указана, туда сохраняется CSV с данными по каждому кейсу.
+    :param file_ending: расширение файлов изображений.
+    :return: pandas.DataFrame со статистикой по каждому кейсу.
+    """
+    rows = []
+    for file_name in sorted(os.listdir(image_folder)):
+        if not file_name.endswith(file_ending):
+            continue
+
+        full_path = os.path.join(image_folder, file_name)
+        crop_path = os.path.join(image_crop_folder, file_name)
+        if not os.path.isfile(crop_path):
+            add_info_logging(f"crop_coverage_statistics: no cropped file for {file_name}, skipping.",
+                             "work_logger")
+            continue
+
+        full_size = sitk.ReadImage(full_path).GetSize()  # (x, y, z)
+        crop_size = sitk.ReadImage(crop_path).GetSize()
+
+        full_voxels = full_size[0] * full_size[1] * full_size[2]
+        crop_voxels = crop_size[0] * crop_size[1] * crop_size[2]
+
+        percent_unused = 100.0 * (1 - crop_voxels / full_voxels)
+
+        rows.append({
+            "case_name": file_name.split('.')[0],
+            "full_size_xyz": full_size,
+            "crop_size_xyz": crop_size,
+            "full_voxels": full_voxels,
+            "crop_voxels": crop_voxels,
+            "percent_cropped_unused": percent_unused,
+        })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        add_info_logging("crop_coverage_statistics: no matching cases found.", "work_logger")
+        return df
+
+    mean_percent = df["percent_cropped_unused"].mean()
+    max_row = df.loc[df["percent_cropped_unused"].idxmax()]
+
+    summary = (f"Crop coverage over {len(df)} cases: "
+              f"average unused = {mean_percent:.2f}%, "
+              f"max unused = {max_row['percent_cropped_unused']:.2f}% (case {max_row['case_name']})")
+    add_info_logging(summary, "result_logger")
+    print(summary)
+
+    if result_folder:
+        write_csv(df, result_folder, "crop_coverage_statistics.csv")
+
+    return df

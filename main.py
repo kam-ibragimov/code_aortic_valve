@@ -16,7 +16,7 @@ from data_preprocessing.check_structure import create_directory_structure
 from data_preprocessing.text_worker import (json_reader, yaml_reader, yaml_save, json_save,
                                             add_info_logging, create_new_json, parse_txt_file)
 from data_preprocessing.csv_worker import write_csv, read_csv
-from data_preprocessing.crop_nii import cropped_image, find_global_size
+from data_preprocessing.crop_nii import cropped_image, find_global_size, crop_coverage_statistics
 # from data_postprocessing.evaluation_analysis import landmarking_testing
 from data_postprocessing.controller_analysis import (landmarks_analysis, experiment_analysis, mask_analysis,
                                                      find_morphometric_parameters, LandmarkCentersCalculator,
@@ -317,6 +317,11 @@ def controller(data_path, cpus):
                           output_image_path=str(os.path.join(image_crop_folder, case)),
                           size=global_size)
         controller_dump["crop_images"] = True
+        yaml_save(controller_dump, controller_path)
+
+    if not controller_dump.get("crop_coverage_stats"):
+        crop_coverage_statistics(image_folder, image_crop_folder, result_folder)
+        controller_dump["crop_coverage_stats"] = True
         yaml_save(controller_dump, controller_path)
 
     if not controller_dump.get("crop_mask_aorta_segment"):
