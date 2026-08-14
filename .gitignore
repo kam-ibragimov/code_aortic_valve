@@ -6,3 +6,7 @@ __pycache__
 *.nrrd
 temporaty_functionality/
 test_data/
+
+# Task notes: folder is tracked, content is not (local working notes)
+task_notes/*
+!task_notes/.gitkeep

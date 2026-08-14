@@ -28,6 +28,7 @@ from models.controller_nnUnet import process_nnunet
 from experiments.nnUnet_experiments import experiment_training
 from models.controller_GNN import process_gnn, process_gnn_post_analysis
 from data_preprocessing.oblique_slice_extractor import find_global_2d_size, extract_2d_slice_pair, process_br_plane_corrections
+from interobserver_study.controller_interobserver import process_interobserver_comparison
 
 # from optimization.parallelization import division_processes
 
@@ -822,6 +823,11 @@ def controller(data_path, cpus):
                     dict_all_case[case_name].update(pred_coords)
             json_save(dict_all_case, dict_all_case_path)
         controller_dump["analys_result_ci_lines"] = True
+        yaml_save(controller_dump, controller_path)
+
+    if not controller_dump.get("interobserver_curve_comparison"):
+        process_interobserver_comparison(result_folder, dict_all_case, interobserver_txt_points_folder)
+        controller_dump["interobserver_curve_comparison"] = True
         yaml_save(controller_dump, controller_path)
 
     if not controller_dump.get("calc_morphometric"):

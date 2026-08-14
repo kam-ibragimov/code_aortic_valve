@@ -30,6 +30,7 @@ find_and_create_mask_gh_landmark: true
 find_geometric_heights: true
 gnn_metrics_post_analysis: true
 gnn_metrics_train_test: true
+interobserver_curve_comparison: true
 json_landmarks_mask_coord: true
 mask_6_landmarks: true
 mask_aorta_segment: true

@@ -15,6 +15,8 @@ from data_postprocessing.mask_analysis import (mask_comparison, LandmarkCentersC
                                                new_spline_from_pixel_coord, load_new_coords_org,
                                                extract_boundary_curve_world)
 from data_postprocessing.plotting_graphs import summarize_and_plot, plot_group_comparison, plot_table
+from data_postprocessing.curve_utils import (_resample_curve, _sample_closed_curve_uniform,
+                                             mean_point_to_curve_distance, point_to_curve_distances)
 from data_preprocessing.text_worker import add_info_logging
 from models.controller_nnUnet import process_nnunet
 from data_postprocessing.metrics_config import metric_to_landmarks
@@ -50,14 +52,6 @@ def load_labels_mask_sitk(file_path, label):
 def _vtk_to_numpy(vtk_curve):
     return np.array([vtk_curve.GetPoints().GetPoint(i)
                      for i in range(vtk_curve.GetNumberOfPoints())])
-
-
-def _resample_curve(pts, n_points):
-    diffs = np.diff(pts, axis=0)
-    cum_len = np.concatenate([[0], np.cumsum(np.linalg.norm(diffs, axis=1))])
-    target = np.linspace(0, cum_len[-1], n_points)
-    resampled = np.column_stack([np.interp(target, cum_len, pts[:, i]) for i in range(3)])
-    return resampled.tolist()
 
 
 def _apply_bezier_anchor(pts, anchor_pt, blend_fraction):
@@ -294,9 +288,7 @@ def curve_lines_analysis(data_path,
                             if anchor_pt is not None:
                                 pts = _apply_bezier_anchor(pts, anchor_pt, blend_fraction)
                     coord_org = dict_cases[case_name][keys_to_need[label]]
-                    distances = [np.sqrt(np.sum((pts - np.array(p)) ** 2, axis=1)).min()
-                                 for p in coord_org]
-                    asd_metric.append(float(np.mean(distances)))
+                    asd_metric.append(mean_point_to_curve_distance(coord_org, pts))
                     if n_curve_points:
                         sampled = _resample_curve(pts, n_curve_points)
                         if case_name not in predictions:
@@ -365,23 +357,6 @@ def curve_lines_analysis(data_path,
     return predictions
 
 
-def _sample_closed_curve_uniform(points, n_points):
-    """Sample n_points equally spaced (by arc length) on a closed curve.
-    The wrap-around segment (last→first) is included so all N gaps are equal.
-    Returns list of [x, y, z] — first and last points are distinct.
-    """
-    pts = np.asarray(points, dtype=float)
-    pts_closed = np.vstack([pts, pts[0:1]])          # close the loop for arc-length calc
-    seg_lengths = np.linalg.norm(np.diff(pts_closed, axis=0), axis=1)
-    cum_len = np.concatenate([[0.0], np.cumsum(seg_lengths)])
-    total_length = cum_len[-1]
-    if total_length == 0 or len(pts) < 2:
-        return None
-    targets = np.arange(n_points) * (total_length / n_points)
-    resampled = np.column_stack([np.interp(targets, cum_len, pts_closed[:, i]) for i in range(3)])
-    return resampled.tolist()
-
-
 def _detect_plane_offset(distances, cv_threshold=0.20, min_mean_mm=0.5):
     """True if all GT-to-curve distances are approximately equal, indicating
     a systematic shift (e.g. wrong annotation plane).
@@ -446,7 +421,7 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases,
 
             gt_points = np.array(dict_cases[case_name]["BR - closed"])
 
-            distances = [np.sqrt(np.sum((pred_boundary - p) ** 2, axis=1)).min() for p in gt_points]
+            distances = point_to_curve_distances(gt_points, pred_boundary)
             mpcd = float(np.mean(distances))
             if plane_offset_mode == "detect":
                 offset = _detect_plane_offset(distances)
@@ -548,20 +523,29 @@ def mask_analysis(data_path, result_path, type_mask, folder_name):
 
     for metric_name in metrics:
         data_for_plot = df[['group', metric_name]].dropna(how='any')
-        assd_mean = df["ASSD"].mean(numeric_only=True)
-        assd_median = df["ASSD"].median(numeric_only=True)
-        assd_std = df["ASSD"].std(numeric_only=True)
-        dice_mean = df["Dice"].mean(numeric_only=True)
-        dice_median = df["Dice"].median(numeric_only=True)
-        dice_std = df["Dice"].std(numeric_only=True)
-        assd_mean_groupby = df.groupby("group")["ASSD"].mean(numeric_only=True)
-        assd_median_groupby = df.groupby("group")["ASSD"].median(numeric_only=True)
-        assd_std_groupby = df.groupby("group")["ASSD"].std(numeric_only=True)
-        dice_mean_groupby = df.groupby("group")["Dice"].mean(numeric_only=True)
-        dice_median_groupby = df.groupby("group")["Dice"].median(numeric_only=True)
-        dice_std_groupby = df.groupby("group")["Dice"].std(numeric_only=True)
         plot_group_comparison('group', metric_name, group_label_map, data_for_plot,
                               os.path.join(str(result_folder_path), "aorta_root_comparison"))
+
+    group_rows = [
+        ("All", None),
+        ("German\npathology", "g"),
+        ("Slovenian\npathology", "p"),
+        ("Slovenian\nnormal", "n"),
+    ]
+    data_table = []
+    for row_label, group_id in group_rows:
+        sub_df = df if group_id is None else df[df["group"] == group_id]
+        row = [row_label]
+        for metric_name in metrics:
+            mean_val = sub_df[metric_name].mean(numeric_only=True)
+            std_val = sub_df[metric_name].std(numeric_only=True)
+            row.append(f"{mean_val:.3f} ± {std_val:.3f}")
+        row.append(int(len(sub_df)))
+        data_table.append(row)
+    columns = ["Type"] + [f"{metric_name}\nmean ± std" for metric_name in metrics] + ["Number of\nimages"]
+    results_table_path = os.path.join(result_folder_path, f"aorta_segment_metrics_{folder_name}.png")
+    plot_table(data_table, columns, results_table_path)
+
     add_info_logging("Analysis completed", "work_logger")
 
 
