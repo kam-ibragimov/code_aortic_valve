@@ -88,7 +88,12 @@ def check_dcm_info(dicom_folder: str):
     }
 
 
-def convert_dcm_to_nii(dicom_folder: str, nii_path: str, zip: bool = False):
+def convert_dcm_to_nii(dicom_folder: str, nii_path: str, zip: bool = False,
+                       orientation: str = 'LPS', pixel_type=sitk.sitkInt16,
+                       target_spacing: list[float] = None):
+    if target_spacing is None:
+        target_spacing = [0.4, 0.4, 0.4]
+
     reader = sitk.ImageSeriesReader()
     dicom_series = reader.GetGDCMSeriesFileNames(dicom_folder)
     reader.SetFileNames(dicom_series)
@@ -98,19 +103,17 @@ def convert_dcm_to_nii(dicom_folder: str, nii_path: str, zip: bool = False):
     identity_direction = (1.0, 0.0, 0.0,
                           0.0, 1.0, 0.0,
                           0.0, 0.0, 1.0)
-    if image.GetDirection() != identity_direction:
-        image = sitk.DICOMOrient(image, 'LPS')
+    if orientation and image.GetDirection() != identity_direction:
+        image = sitk.DICOMOrient(image, orientation)
         image.SetDirection(identity_direction)
 
-    # Приведение к float32
-    image = sitk.Cast(image, sitk.sitkInt16)
+    if pixel_type is not None:
+        image = sitk.Cast(image, pixel_type)
 
-    # Приведение к новому spacing
-    new_spacing = [0.4, 0.4, 0.4]
     original_spacing = image.GetSpacing()
     original_size = image.GetSize()
     new_size = [
-        int(round(original_size[i] * (original_spacing[i] / new_spacing[i])))
+        int(round(original_size[i] * (original_spacing[i] / target_spacing[i])))
         for i in range(3)
     ]
 
@@ -120,7 +123,7 @@ def convert_dcm_to_nii(dicom_folder: str, nii_path: str, zip: bool = False):
         sitk.Transform(),
         sitk.sitkLinear,
         image.GetOrigin(),  # origin не трогаем
-        new_spacing,
+        target_spacing,
         image.GetDirection(),
         0.0,
         image.GetPixelID()
@@ -154,52 +157,60 @@ def reader_dcm(dicom_folder: str):
 
 def resample_nii(nii_original_path: str,
                  nii_resample_path: str,
-                 size_or_pixel: str = None,
-                 variable: list[float] = [1.0, 1.0, 1.0]):
+                 target_spacing: list[float] = None,
+                 target_size: list[int] = None,
+                 orientation: str = None,
+                 pixel_type=None):
+    """Ресемплит NIfTI-изображение к целевому spacing либо к целевому размеру
+    в вокселях (передаётся ровно один из двух), опционально приводя
+    ориентацию (LPS/identity direction) и тип пикселей."""
+
+    if (target_spacing is None) == (target_size is None):
+        raise ValueError("Нужно передать ровно один из параметров: target_spacing или target_size.")
 
     # Loading the original image
     image = sitk.ReadImage(nii_original_path)
 
-    # Create a resampling filter
-    resampler = sitk.ResampleImageFilter()
+    # Ориентация меняется, только если явно передан параметр orientation
+    if orientation:
+        identity_direction = (1.0, 0.0, 0.0,
+                              0.0, 1.0, 0.0,
+                              0.0, 0.0, 1.0)
+        if image.GetDirection() != identity_direction:
+            image = sitk.DICOMOrient(image, orientation)
+            image.SetDirection(identity_direction)
 
-    # Set new voxel sizes (e.g. 1x1x1 mm)
+    # Тип пикселей меняется, только если явно передан параметр pixel_type
+    if pixel_type is not None:
+        image = sitk.Cast(image, pixel_type)
+
     original_spacing = image.GetSpacing()
     original_size = image.GetSize()
 
-    if size_or_pixel == "size":
-        # Вычисляем новое `spacing` (чтобы сохранить правильный масштаб)
-        new_size = variable
+    if target_size is not None:
+        # Вычисляем новый spacing (чтобы сохранить физический размер изображения)
+        new_size = target_size
         new_spacing = [
-            (original_spacing[0] * original_size[0]) / new_size[0],
-            (original_spacing[1] * original_size[1]) / new_size[1],
-            (original_spacing[2] * original_size[2]) / new_size[2]
+            (original_spacing[i] * original_size[i]) / new_size[i]
+            for i in range(3)
         ]
     else:
-        new_spacing = variable
-        # Calculate the new image size in voxels
+        new_spacing = target_spacing
+        # Вычисляем новый размер в вокселях (округление до ближайшего целого,
+        # а не усечение - иначе теряем часть физического объёма изображения)
         new_size = [
-            int(original_size[0] * (original_spacing[0] / new_spacing[0])),
-            int(original_size[1] * (original_spacing[1] / new_spacing[1])),
-            int(original_size[2] * (original_spacing[2] / new_spacing[2]))
+            int(round(original_size[i] * (original_spacing[i] / new_spacing[i])))
+            for i in range(3)
         ]
 
-    # Set parameters resampling
+    resampler = sitk.ResampleImageFilter()
     resampler.SetOutputSpacing(new_spacing)
-    # resampler.SetSize(tuple(new_size))
-    resampler.SetSize(np.array(new_size, dtype='int').tolist())
+    resampler.SetSize(new_size)
     resampler.SetOutputOrigin(image.GetOrigin())  # Initial origin point
     resampler.SetOutputDirection(image.GetDirection())  # Keep the same orientation
-
-    # Interpolation: linear, Nearest-neighbor, B-Spline of order 3 interpolation
-    # resampler.SetInterpolator(sitk.sitkLinear)
     resampler.SetInterpolator(sitk.sitkBSpline)
-    # resampler.SetInterpolator(sitk.sitkNearestNeighbor)
-
-    # Set the value for pixels that will be outside the image (for example, 0)
     resampler.SetDefaultPixelValue(0)
 
-    # Apply the resampling filter
     resampled_image = resampler.Execute(image)
 
     # Saving an image in NIfTI format
