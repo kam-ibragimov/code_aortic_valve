@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code_aortic_valve"
+version = "0.1.0"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "configurator*",
+    "data_postprocessing*",
+    "data_preprocessing*",
+    "data_visualization*",
+    "experiments*",
+    "interobserver_study*",
+    "models*",
+    "optimization*",
+    "slicer_project_generator*",
+    "utility*",
+]
+namespaces = true
