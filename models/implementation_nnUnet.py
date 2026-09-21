@@ -1,5 +1,5 @@
 import os
-from subprocess import call
+from subprocess import call, run
 import logging
 # import platform
 import torch
@@ -78,12 +78,13 @@ class nnUnet_trainer:
             command.append("--save_probabilities")
 
         # Execute the predicting
+        add_info_logging("Starting nnU-Net predict", "work_logger")
         try:
-            add_info_logging("Starting nnU-Net predict", "work_logger")
-            call(command)
-            add_info_logging("Predicting completed successfully", "work_logger")
+            run(command, check=True)
         except Exception as e:
             add_info_logging(f"An error occurred during predicting: {e}", "work_logger")
+            raise
+        add_info_logging("Predicting completed successfully", "work_logger")
 
     def evaluation(self, input_folder, output_folder, task_id, fold=0, network="3d_fullres"):
 
