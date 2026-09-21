@@ -64,7 +64,7 @@ class nnUnet_trainer:
             add_info_logging(f"An error occurred during training: {e}", "work_logger")
 
     def predicting(self, input_folder, output_folder, task_id, fold=0, network="3d_fullres",
-                   save_probabilities=False):
+                   save_probabilities=False, device=None):
 
         command = [
             "nnUNetv2_predict",
@@ -76,6 +76,8 @@ class nnUnet_trainer:
         ]
         if save_probabilities:
             command.append("--save_probabilities")
+        if device:
+            command += ["-device", device]
 
         # Execute the predicting
         add_info_logging("Starting nnU-Net predict", "work_logger")
