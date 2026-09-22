@@ -52,6 +52,11 @@ def _calculate_new_bounds(mask, size):
     # Find the indices of nonzero voxels in the mask
     nonzero_indices = np.argwhere(mask > 0)
 
+    if nonzero_indices.size == 0:
+        add_info_logging("Cannot compute crop bounds: mask is empty (no nonzero voxels).",
+                         "work_logger")
+        raise ValueError("Cannot compute crop bounds: mask is empty (no nonzero voxels).")
+
     # Determine the minimum and maximum indices for each axis
     z_min, y_min, x_min = nonzero_indices.min(axis=0)
     z_max, y_max, x_max = nonzero_indices.max(axis=0)
