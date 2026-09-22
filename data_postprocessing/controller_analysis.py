@@ -15,7 +15,7 @@ from data_postprocessing.mask_analysis import (mask_comparison, LandmarkCentersC
                                                new_spline_from_pixel_coord, load_new_coords_org,
                                                extract_boundary_curve_world)
 from data_postprocessing.plotting_graphs import summarize_and_plot, plot_group_comparison, plot_table
-from data_postprocessing.curve_utils import (_resample_curve, _sample_closed_curve_uniform,
+from data_postprocessing.curve_utils import (resample_curve, sample_closed_curve_uniform,
                                              mean_point_to_curve_distance, point_to_curve_distances)
 from data_preprocessing.text_worker import add_info_logging
 from models.controller_nnUnet import process_nnunet
@@ -107,7 +107,7 @@ def _sample_curve_points(vtk_curve, n_points):
     pts = vtk_to_numpy(vtk_curve)
     if len(pts) < 2:
         return None
-    return _resample_curve(pts, n_points)
+    return resample_curve(pts, n_points)
 
 
 def curve_lines_analysis(data_path,
@@ -290,7 +290,7 @@ def curve_lines_analysis(data_path,
                     coord_org = dict_cases[case_name][keys_to_need[label]]
                     asd_metric.append(mean_point_to_curve_distance(coord_org, pts))
                     if n_curve_points:
-                        sampled = _resample_curve(pts, n_curve_points)
+                        sampled = resample_curve(pts, n_curve_points)
                         if case_name not in predictions:
                             predictions[case_name] = {}
                         predictions[case_name][keys_to_need[label] + "_pred"] = sampled
@@ -438,7 +438,7 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases,
             })
 
             if n_curve_points:
-                sampled = _sample_closed_curve_uniform(pred_boundary, n_curve_points)
+                sampled = sample_closed_curve_uniform(pred_boundary, n_curve_points)
                 if sampled is not None:
                     predictions[case_name] = {"BR_pred": sampled}
 

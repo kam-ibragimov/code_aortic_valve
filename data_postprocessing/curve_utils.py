@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def _resample_curve(pts, n_points):
+def resample_curve(pts, n_points):
     diffs = np.diff(pts, axis=0)
     cum_len = np.concatenate([[0], np.cumsum(np.linalg.norm(diffs, axis=1))])
     target = np.linspace(0, cum_len[-1], n_points)
@@ -9,7 +9,7 @@ def _resample_curve(pts, n_points):
     return resampled.tolist()
 
 
-def _sample_closed_curve_uniform(points, n_points):
+def sample_closed_curve_uniform(points, n_points):
     """Sample n_points equally spaced (by arc length) on a closed curve.
     The wrap-around segment (last→first) is included so all N gaps are equal.
     Returns list of [x, y, z] — first and last points are distinct.
