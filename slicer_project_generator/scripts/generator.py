@@ -6,7 +6,7 @@ import SimpleITK as sitk
 from tkinter import messagebox, Tk
 from slicer_project_generator.scripts.utils import json_reader, json_save
 import re
-from data_postprocessing.controller_analysis import load_mask, load_labels_mask_sitk, _apply_bezier_anchor
+from data_postprocessing.controller_analysis import load_mask, load_labels_mask_sitk, apply_bezier_anchor
 from data_postprocessing.mask_analysis import extract_boundary_curve_world
 from data_postprocessing.vtk_analysis import CenterlineExtractor
 
@@ -228,7 +228,7 @@ class ProjectGenerator:
                 for anchor_case_key in anchor_map[output_key]:
                     anchor_pt = self.case_data.get(anchor_case_key)
                     if anchor_pt is not None:
-                        pts = _apply_bezier_anchor(pts, anchor_pt, blend_fraction)
+                        pts = apply_bezier_anchor(pts, anchor_pt, blend_fraction)
             t = np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))])
             t /= t[-1]
             t_new = np.linspace(0, 1, n_samples)

@@ -49,12 +49,12 @@ def load_labels_mask_sitk(file_path, label):
     return mask_sitk
 
 
-def _vtk_to_numpy(vtk_curve):
+def vtk_to_numpy(vtk_curve):
     return np.array([vtk_curve.GetPoints().GetPoint(i)
                      for i in range(vtk_curve.GetNumberOfPoints())])
 
 
-def _apply_bezier_anchor(pts, anchor_pt, blend_fraction):
+def apply_bezier_anchor(pts, anchor_pt, blend_fraction):
     """Replace the nearer endpoint tail with a cubic Bezier that lands exactly on anchor_pt.
 
     Auto-detects which end (first or last point) is closer to the anchor,
@@ -104,7 +104,7 @@ def _apply_bezier_anchor(pts, anchor_pt, blend_fraction):
 
 
 def _sample_curve_points(vtk_curve, n_points):
-    pts = _vtk_to_numpy(vtk_curve)
+    pts = vtk_to_numpy(vtk_curve)
     if len(pts) < 2:
         return None
     return _resample_curve(pts, n_points)
@@ -277,7 +277,7 @@ def curve_lines_analysis(data_path,
                         })
                         asd_metric.append(np.nan)
                         continue
-                    pts = _vtk_to_numpy(vtk_curve_pred)
+                    pts = vtk_to_numpy(vtk_curve_pred)
                     if len(pts) < 2:
                         asd_metric.append(np.nan)
                         continue
@@ -286,7 +286,7 @@ def curve_lines_analysis(data_path,
                         for anchor_key in anchor_keys.get(label_name, []):
                             anchor_pt = dict_cases[case_name].get(anchor_key)
                             if anchor_pt is not None:
-                                pts = _apply_bezier_anchor(pts, anchor_pt, blend_fraction)
+                                pts = apply_bezier_anchor(pts, anchor_pt, blend_fraction)
                     coord_org = dict_cases[case_name][keys_to_need[label]]
                     asd_metric.append(mean_point_to_curve_distance(coord_org, pts))
                     if n_curve_points:
