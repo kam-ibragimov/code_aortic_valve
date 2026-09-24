@@ -1,21 +1,15 @@
-SimpleITK
-nibabel
+# Core dependencies - enough for the inference helpers that aortic-seg-infer
+# imports (data_preprocessing: text_worker, dcm_nii_converter, crop_nii,
+# oblique_slice_extractor; data_postprocessing: mask_analysis, curve_utils,
+# vtk_analysis). Everything else (training, analysis, plots, experiments)
+# needs the [full] extra:  pip install -e ".[full]"  - see requirements-full.txt.
+# Keep heavy packages out of this file: aortic-seg-infer ships this set to
+# doctors' machines, and every package here ends up in its installer.
 numpy==1.26.4
-pandas
-matplotlib
-totalsegmentator
-trimesh
-rtree
-numpy-stl
-open3d
-vtk
-torchvision
-torch
-torch_geometric
-psutil
-medpy
-pyvista
-pycpd
+SimpleITK
+scipy
+# pinned: the version the inference pipeline was validated with (9.7 is also ~100 MB larger)
+vtk==9.3.1
 scikit-image==0.21.0
+pyyaml
 MeshMetrics @ git+https://github.com/gasperpodobnik/MeshMetrics.git
-morpho-gcn @ git+https://github.com/kam-ibragimov/morpho-gcn.git

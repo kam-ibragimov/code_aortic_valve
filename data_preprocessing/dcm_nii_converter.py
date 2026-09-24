@@ -2,7 +2,6 @@ from pathlib import Path
 
 import SimpleITK as sitk
 import numpy as np
-import pydicom
 from datetime import datetime
 
 
@@ -18,6 +17,8 @@ def _calculate_age(birth_date_str, study_date_str):
 
 
 def _compute_slice_nonuniformity(dicom_series):
+    # Lazy import: not part of the core install (see requirements-full.txt)
+    import pydicom
     z_positions = []
 
     for file in dicom_series:
@@ -44,6 +45,8 @@ def _compute_slice_nonuniformity(dicom_series):
 
 def check_dcm_info(dicom_folder: str):
 
+    # Lazy import: not part of the core install (see requirements-full.txt)
+    import pydicom
     reader = sitk.ImageSeriesReader()
     dicom_series = reader.GetGDCMSeriesFileNames(dicom_folder)
 

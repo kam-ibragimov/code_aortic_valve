@@ -1,4 +1,5 @@
 import numpy as np
+import SimpleITK as sitk
 
 
 def resample_curve(pts, n_points):
@@ -37,3 +38,70 @@ def mean_point_to_curve_distance(gt_points, curve_points):
     """Mean point-to-curve distance (MPCD): for each GT point, the distance to
     the nearest point on curve_points, averaged over all GT points."""
     return float(np.mean(point_to_curve_distances(gt_points, curve_points)))
+
+
+def load_labels_mask_sitk(file_path, label):
+    mask_img = sitk.ReadImage(file_path)
+    masks_array = sitk.GetArrayFromImage(mask_img)
+    mask_binary = (masks_array == label).astype(np.uint8)
+
+    mask_sitk = sitk.GetImageFromArray(mask_binary)
+    mask_sitk.SetOrigin(mask_img.GetOrigin())
+    mask_sitk.SetSpacing(mask_img.GetSpacing())
+    mask_sitk.SetDirection(mask_img.GetDirection())
+
+    return mask_sitk
+
+
+def vtk_to_numpy(vtk_curve):
+    return np.array([vtk_curve.GetPoints().GetPoint(i)
+                     for i in range(vtk_curve.GetNumberOfPoints())])
+
+
+def apply_bezier_anchor(pts, anchor_pt, blend_fraction):
+    """Replace the nearer endpoint tail with a cubic Bezier that lands exactly on anchor_pt.
+
+    Auto-detects which end (first or last point) is closer to the anchor,
+    flips the array if needed so the logic always works on the tail,
+    then flips back before returning.
+    """
+    anchor = np.array(anchor_pt, dtype=float)
+
+    dist0 = np.linalg.norm(pts[0] - anchor)
+    distn = np.linalg.norm(pts[-1] - anchor)
+    flip = dist0 < distn
+    if flip:
+        pts = pts[::-1].copy()
+
+    n = len(pts)
+    blend_idx = max(1, int(n * (1.0 - blend_fraction)))
+
+    # Stable tangent: average direction over a small window before blend_idx
+    window = max(3, int(n * 0.03))
+    tangent = pts[blend_idx] - pts[max(0, blend_idx - window)]
+    t_norm = np.linalg.norm(tangent)
+    if t_norm < 1e-9:
+        tangent = pts[-1] - pts[0]
+        t_norm = np.linalg.norm(tangent)
+    tangent = tangent / t_norm
+
+    P0, P3 = pts[blend_idx], anchor
+    dist = np.linalg.norm(P3 - P0)
+
+    # P1 continues the existing curve direction; P2 approaches anchor naturally
+    P1 = P0 + tangent * dist * 0.4
+    approach = P0 - P3
+    a_norm = np.linalg.norm(approach)
+    P2 = P3 + (approach / a_norm) * dist * 0.4 if a_norm > 1e-9 else P3
+
+    n_bez = max(20, n - blend_idx)
+    t = np.linspace(0, 1, n_bez)
+    bezier = (
+        ((1 - t) ** 3)[:, None] * P0
+        + 3 * ((1 - t) ** 2 * t)[:, None] * P1
+        + 3 * ((1 - t) * t ** 2)[:, None] * P2
+        + (t ** 3)[:, None] * P3
+    )
+
+    modified = np.vstack([pts[:blend_idx], bezier])
+    return modified[::-1].copy() if flip else modified

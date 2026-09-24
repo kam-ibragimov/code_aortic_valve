@@ -6,10 +6,11 @@ build-backend = "setuptools.build_meta"
 name = "code_aortic_valve"
 version = "0.1.0"
 requires-python = ">=3.11"
-dynamic = ["dependencies"]
+dynamic = ["dependencies", "optional-dependencies"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
+optional-dependencies.full = {file = ["requirements-full.txt"]}
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -1,0 +1,20 @@
+# [full] extra - training, analysis, plots, experiments. Installed on top of
+# requirements.txt (core) with:  pip install -e ".[full]"
+nibabel
+pydicom
+pandas
+matplotlib
+scikit-learn
+totalsegmentator
+trimesh
+rtree
+numpy-stl
+open3d
+torchvision
+torch
+torch_geometric
+psutil
+medpy
+pyvista
+pycpd
+morpho-gcn @ git+https://github.com/kam-ibragimov/morpho-gcn.git

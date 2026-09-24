@@ -1,7 +1,6 @@
 import os
 
 import numpy as np
-import pandas as pd
 import SimpleITK as sitk
 from pathlib import Path
 
@@ -241,6 +240,8 @@ def process_br_plane_corrections(dict_all_case, result_folder):
 
     Returns the modified dict_all_case.
     """
+    # Lazy import: not part of the core install (see requirements-full.txt)
+    import pandas as pd
     offset_rows = []
     for case_name, points_dict in dict_all_case.items():
         if "BR - closed" not in points_dict:

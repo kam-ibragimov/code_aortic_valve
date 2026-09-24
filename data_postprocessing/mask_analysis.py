@@ -1,8 +1,6 @@
 import os
-import nibabel as nib
 import numpy as np
 import SimpleITK as sitk
-from data_postprocessing.evaluation_analysis import  evaluate_segmentation
 from data_preprocessing.text_worker import add_info_logging
 from skimage.morphology import skeletonize_3d
 from scipy.interpolate import splprep, splev
@@ -195,6 +193,9 @@ def extract_boundary_curve_world(mask_array, mask_sitk):
 
 
 def mask_comparison(data_path, type_mask, folder_name):
+    # Lazy import: not part of the core install (see requirements-full.txt)
+    import nibabel as nib
+    from data_postprocessing.evaluation_analysis import  evaluate_segmentation
     nnUNet_folder = os.path.join(data_path, "nnUNet_folder")
     result_mask_folder = os.path.join(nnUNet_folder, "nnUNet_test", folder_name)
     original_mask_folder = os.path.join(nnUNet_folder, "original_mask", folder_name)

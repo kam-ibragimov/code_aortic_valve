@@ -1,11 +1,9 @@
 import os
 import math
 import numpy as np
-import pandas as pd
 import SimpleITK as sitk
 
 from data_preprocessing.text_worker import add_info_logging
-from data_preprocessing.csv_worker import write_csv
 
 
 def find_global_size(image_paths, padding=16):
@@ -190,6 +188,9 @@ def crop_coverage_statistics(image_folder, image_crop_folder, result_folder=None
     :param file_ending: расширение файлов изображений.
     :return: pandas.DataFrame со статистикой по каждому кейсу.
     """
+    # Lazy import: not part of the core install (see requirements-full.txt)
+    import pandas as pd
+    from data_preprocessing.csv_worker import write_csv
     rows = []
     for file_name in sorted(os.listdir(image_folder)):
         if not file_name.endswith(file_ending):
