@@ -10,3 +10,7 @@ test_data/
 # Task notes: folder is tracked, content is not (local working notes)
 task_notes/*
 !task_notes/.gitkeep
+
+# Package build artifacts (pip install . / pyproject build)
+build/
+*.egg-info/

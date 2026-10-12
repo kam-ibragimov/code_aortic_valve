@@ -5,7 +5,7 @@ import SimpleITK as sitk
 import numpy as np
 from scipy.interpolate import splprep, splev
 from scipy.ndimage import convolve as nd_convolve, label as nd_label, generate_binary_structure
-from MeshMetrics.utils import vtk_meshing, np2sitk
+from data_postprocessing.mesh_utils import vtk_meshing, np2sitk
 
 import vtk
 

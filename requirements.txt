@@ -12,4 +12,8 @@ scipy
 vtk==9.3.1
 scikit-image==0.21.0
 pyyaml
-MeshMetrics @ git+https://github.com/gasperpodobnik/MeshMetrics.git
+# MeshMetrics is no longer a dependency: the few helpers vtk_analysis needs are
+# vendored in data_postprocessing/mesh_utils.py (see the header there).
+# mesh_utils needs SimpleITK.utilities.vtk.sitk2vtk - a separate package that
+# MeshMetrics used to pull in. Pinned: the version the pipeline was validated with.
+SimpleITKUtilities==0.3.0
