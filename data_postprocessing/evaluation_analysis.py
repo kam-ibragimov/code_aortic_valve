@@ -98,6 +98,29 @@ class landmarking_locked:
         return results
 
 
+def _crop_to_union_bbox(a: np.ndarray, b: np.ndarray, margin: int = 2):
+    """
+    Вырезает из обеих масок один общий bounding box ненулевых вокселей (объединение a и b)
+    с запасом margin, не выходя за границы массива. Оба массива режутся одними срезами,
+    поэтому взаимное расположение масок сохраняется. Вне бокса обе маски нулевые, так что
+    Dice/IoU/HD/ASSD не меняются, а distance transform считается на малом объёме.
+    """
+    union = (a > 0) | (b > 0)
+    if not union.any():
+        return a, b
+    slices = []
+    for axis in range(union.ndim):
+        other = tuple(i for i in range(union.ndim) if i != axis)
+        idx = np.flatnonzero(union.any(axis=other))
+        slices.append(slice(max(idx[0] - margin, 0), min(idx[-1] + margin + 1, union.shape[axis])))
+    slices = tuple(slices)
+    a_crop, b_crop = a[slices], b[slices]
+    if (np.count_nonzero(a_crop) != np.count_nonzero(a) or
+            np.count_nonzero(b_crop) != np.count_nonzero(b)):
+        raise RuntimeError("Bounding-box crop lost foreground voxels")
+    return a_crop, b_crop
+
+
 def evaluate_segmentation(true_mask: np.ndarray, pred_mask: np.ndarray, num_classes: int = 1,
                           average: Literal['macro', 'weighted'] = 'macro'):
     """
@@ -112,17 +135,23 @@ def evaluate_segmentation(true_mask: np.ndarray, pred_mask: np.ndarray, num_clas
     Returns:
         dict: {'Dice': ..., 'IoU': ...}
     """
-    true_flat = true_mask.flatten()
-    pred_flat = pred_mask.flatten()
-
     metrics = {}
 
     if num_classes == 1:
-        dice = f1_score(true_flat, pred_flat)
-        iou = jaccard_score(true_flat, pred_flat)
+        true_mask, pred_mask = _crop_to_union_bbox(true_mask, pred_mask)
 
-        metrics["Dice"] = dice
-        metrics["IoU"] = iou
+        # То же, что sklearn f1_score / jaccard_score (pos_label=1, zero_division -> 0.0),
+        # но без flatten-копий и float-массивов на весь объём
+        true_pos = true_mask == 1
+        pred_pos = pred_mask == 1
+        tp = int(np.count_nonzero(true_pos & pred_pos))
+        n_true = int(np.count_nonzero(true_pos))
+        n_pred = int(np.count_nonzero(pred_pos))
+        del true_pos, pred_pos
+        union = n_true + n_pred - tp
+
+        metrics["Dice"] = 2 * tp / (n_true + n_pred) if (n_true + n_pred) > 0 else 0.0
+        metrics["IoU"] = tp / union if union > 0 else 0.0
 
         try:
             # Преобразуем в бинарные маски
@@ -139,6 +168,8 @@ def evaluate_segmentation(true_mask: np.ndarray, pred_mask: np.ndarray, num_clas
             metrics["HD"] = np.nan
             metrics["ASSD"] = np.nan
     else:
+        true_flat = true_mask.flatten()
+        pred_flat = pred_mask.flatten()
         dice = f1_score(true_flat, pred_flat, average=average, labels=range(num_classes))
         iou = jaccard_score(true_flat, pred_flat, average=average, labels=range(num_classes))
         metrics["Dice"] = dice

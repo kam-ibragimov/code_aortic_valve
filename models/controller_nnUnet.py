@@ -2,6 +2,10 @@ import os
 import shutil
 from pathlib import Path
 
+import numpy as np
+import SimpleITK as sitk
+from scipy.ndimage import label
+
 from data_preprocessing.text_worker import add_info_logging
 from nnunetv2.dataset_conversion.generate_dataset_json import generate_dataset_json
 from models.implementation_nnUnet import nnUnet_trainer
@@ -53,10 +57,48 @@ def _copy_img(input_imgs_path, output_folder, rename=False):
             shutil.copy(img_path, output_folder/img_path.name)
 
 
+def _keep_largest_component(mask_path):
+    """
+    Оставляет в маске только наибольший связный компонент переднего плана (все метки > 0 вместе),
+    остальные компоненты обнуляет и перезаписывает файл. Связность 26 соседей — как в nnU-Net
+    (remove_all_but_largest_component). Компоненты ищутся внутри bounding box переднего плана:
+    результат тот же, но не нужен массив меток на весь объём (на больших КТ это десятки ГБ).
+    Возвращает число удалённых вокселей.
+    """
+    image = sitk.ReadImage(str(mask_path))
+    seg = sitk.GetArrayFromImage(image)
+    foreground = seg > 0
+    if not foreground.any():
+        return 0
+
+    slices = []
+    for axis in range(foreground.ndim):
+        other = tuple(i for i in range(foreground.ndim) if i != axis)
+        idx = np.flatnonzero(foreground.any(axis=other))
+        slices.append(slice(idx[0], idx[-1] + 1))
+    slices = tuple(slices)
+
+    labeled, num = label(foreground[slices], structure=np.ones((3,) * foreground.ndim, dtype=bool))
+    if num <= 1:
+        return 0
+    sizes = np.bincount(labeled.ravel())
+    sizes[0] = 0
+    remove = (labeled != 0) & (labeled != np.argmax(sizes))
+    removed = int(np.count_nonzero(remove))
+
+    seg_crop = seg[slices]
+    seg_crop[remove] = 0
+
+    new_image = sitk.GetImageFromArray(seg)
+    new_image.CopyInformation(image)
+    sitk.WriteImage(new_image, str(mask_path), useCompression=True)
+    return removed
+
+
 def process_nnunet(folder, ds_folder_name, id_case, folder_image_path,
                    folder_mask_path, dict_dataset, train_test_lists, create_ds=False,
                    training_mod=False, predicting_mod=False, save_probabilities=True,
-                   network="3d_fullres"):
+                   network="3d_fullres", keep_largest_component=False):
 
     folder = Path(folder)
 
@@ -105,3 +147,12 @@ def process_nnunet(folder, ds_folder_name, id_case, folder_image_path,
                                 task_id=id_case, fold="all",
                                 save_probabilities=save_probabilities,
                                 network=network)
+
+        if keep_largest_component:
+            # Постобработка: удаляем ложные фрагменты, маски перезаписываются на месте.
+            # Файлы вероятностей (.npz) не меняются.
+            for mask_path in sorted(output_folder.glob("*.nii.gz")):
+                removed = _keep_largest_component(mask_path)
+                if removed:
+                    add_info_logging(f"{ds_folder_name}: {mask_path.name} - removed {removed} voxels "
+                                     f"outside the largest component", "work_logger")

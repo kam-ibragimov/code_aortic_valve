@@ -215,8 +215,15 @@ def mask_comparison(data_path, type_mask, folder_name):
             add_info_logging(f"Missing {case_name} - no original mask", "work_logger")
             continue
 
-        result_mask = nib.load(result_mask_path).get_fdata()
-        mask_img = nib.load(original_mask_path).get_fdata()
+        result_nii = nib.load(result_mask_path)
+        original_nii = nib.load(original_mask_path)
+        # Метрики считаются по индексам вокселей, поэтому геометрия двух файлов должна совпадать
+        if not np.allclose(result_nii.affine, original_nii.affine, atol=1e-3):
+            add_info_logging(f"Affine mismatch for the case: {case_name}", "work_logger")
+
+        # uint8 вместо get_fdata() (float64): маски бинарные, значения те же, памяти в 8 раз меньше
+        result_mask = np.asanyarray(result_nii.dataobj).astype(np.uint8)
+        mask_img = np.asanyarray(original_nii.dataobj).astype(np.uint8)
 
         if result_mask.shape != mask_img.shape:
             add_info_logging(f"The dimensions do not match for the case: {case_name}", "work_logger")
@@ -282,13 +289,14 @@ class LandmarkCentersCalculator:
         origin = np.array(mask_image.GetOrigin())  # World coordinate of (0,0,0)
         direction = np.array(mask_image.GetDirection()).reshape(3, 3)  # Reshape to 3x3 matrix
 
-        prob_map_all = np.load(mask_npz)
-        labels = len(prob_map_all["probabilities"])
+        # Распаковываем npz один раз: каждое обращение prob_map_all["probabilities"] заново читает весь массив
+        probabilities = np.load(mask_npz)["probabilities"]
+        labels = len(probabilities)
 
         # Compute center of mass for each label
         centers_of_mass = {}
         for label in range(1, labels):
-            binary_mask = prob_map_all["probabilities"][label]  # Create binary mask for current label
+            binary_mask = probabilities[label]  # Create binary mask for current label
             binary_mask[binary_mask < np.max(binary_mask)*0.2] = 0
             center_world = self._compute_center_of_mass(binary_mask, spacing, origin, direction)
             if center_world is not None:
