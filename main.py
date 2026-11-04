@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 import platform
 import json
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -106,16 +107,16 @@ def controller(data_path, cpus):
         controller_dump = {}
 
     if not controller_dump.get("check_metadata_dicom"):
-        summary_info = []
         dicom_folders = _find_series_folders(dicom_folder, "dcm", parent=True)
 
-        for folder_path in dicom_folders:
-            case_name = folder_path.name
-            info = check_dcm_info(folder_path)
-            info["case_name"] = case_name
-            summary_info.append(info)
+        # Кейсы независимы - читаем заголовки параллельно, порядок строк сохраняется
+        with ProcessPoolExecutor(max_workers=cpus) as executor:
+            summary_info = list(executor.map(check_dcm_info, sorted(dicom_folders)))
         df = pd.DataFrame(summary_info)
         write_csv(df, result_folder, "dicom_metadata_info.csv")
+        # Excel-копия для просмотра (кортежи openpyxl не пишет - переводим в строки)
+        df.map(lambda x: str(x) if isinstance(x, (tuple, list)) else x).to_excel(
+            os.path.join(result_folder, "dicom_metadata_info.xlsx"), index=False)
 
         # 📄 Сохраняем JSON с уникальными значениями по каждому столбцу (кроме case_name)
         unique_info = {

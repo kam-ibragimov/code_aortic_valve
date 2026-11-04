@@ -16,19 +16,40 @@ def _calculate_age(birth_date_str, study_date_str):
         return "Unknown"
 
 
-def _compute_slice_nonuniformity(dicom_series):
+def _read_series_headers(dicom_folder):
+    """
+    Один проход по заголовкам всех файлов папки (без пикселей).
+    Возвращает файлы серии, отсортированные вдоль нормали к срезу (как GDCM), и заголовок первого среза.
+    """
     # Lazy import: not part of the core install (see requirements-full.txt)
     import pydicom
-    z_positions = []
-
-    for file in dicom_series:
+    headers = []
+    for file in Path(dicom_folder).iterdir():
+        if not file.is_file():
+            continue
         try:
             ds = pydicom.dcmread(file, stop_before_pixels=True)
-            ipp = ds.get("ImagePositionPatient", None)
-            if ipp:
-                z_positions.append(ipp[2])  # Z-координата
         except Exception:
             continue
+        if "ImagePositionPatient" in ds and "ImageOrientationPatient" in ds:
+            headers.append((str(file), ds))
+
+    if not headers:
+        return [], None
+
+    # Если в папке несколько серий - берём самую большую
+    uids = [ds.get("SeriesInstanceUID", "") for _, ds in headers]
+    main_uid = max(set(uids), key=uids.count)
+    headers = [(f, ds) for f, ds in headers if ds.get("SeriesInstanceUID", "") == main_uid]
+
+    iop = np.array(headers[0][1].ImageOrientationPatient, dtype=float)
+    normal = np.cross(iop[:3], iop[3:])
+    headers.sort(key=lambda h: float(np.dot(np.array(h[1].ImagePositionPatient, dtype=float), normal)))
+    return headers, headers[0][1]
+
+
+def _compute_slice_nonuniformity(headers):
+    z_positions = [float(ds.ImagePositionPatient[2]) for _, ds in headers]  # Z-координата
 
     if len(z_positions) < 2:
         return "Insufficient slices"
@@ -43,45 +64,77 @@ def _compute_slice_nonuniformity(dicom_series):
     return round(nonuniformity, 5)
 
 
+def _case_origin_and_type(case_name: str):
+    """Источник и тип кейса по первой букве имени: H - Homburg pathology, n - normal, p - pathology."""
+    first_letter = case_name[:1]
+    if first_letter == "H":
+        return "Homburg", "pathological"
+    elif first_letter == "n":
+        return "Ljubljana", "normal"
+    elif first_letter == "p":
+        return "Ljubljana", "pathological"
+    return "Unknown", "Unknown"
+
+
 def check_dcm_info(dicom_folder: str):
 
-    # Lazy import: not part of the core install (see requirements-full.txt)
-    import pydicom
-    reader = sitk.ImageSeriesReader()
-    dicom_series = reader.GetGDCMSeriesFileNames(dicom_folder)
+    # Все заголовки читаются один раз: и для сортировки срезов, и для неравномерности по Z
+    headers, ds = _read_series_headers(dicom_folder)
+    dicom_series = [f for f, _ in headers]
+
+    case_name = Path(dicom_folder).name
+    origin, case_type = _case_origin_and_type(case_name)
 
     if not dicom_series:
-        return {"error": "No DICOM files found."}
+        return {"case_name": case_name, "error": "No DICOM files found."}
 
-    # Читаем метаданные через pydicom (первый файл)
-    ds = pydicom.dcmread(dicom_series[0])
+    # Метаданные - из заголовка первого среза
     birth_date = ds.get("PatientBirthDate", "")
     study_date = ds.get("StudyDate", ds.get("SeriesDate", ""))
     age = _calculate_age(birth_date, study_date)
     sex = ds.get("PatientSex", "Unknown")
-    manufacturer = ds.get("Manufacturer", "Unknown")
-    model = ds.get("ManufacturerModelName", "Unknown")
+    manufacturer = ds.get("Manufacturer", "Unknown")  # (0008,0070)
+    model = ds.get("ManufacturerModelName", "Unknown")  # (0008,1090)
+    tube_voltage = ds.get("KVP", "Unknown")  # (0018,0060)
     slice_thickness = ds.get("SliceThickness", "Unknown")
 
     # Вычисляем неравномерность по оси Z
-    z_nonuniformity = _compute_slice_nonuniformity(dicom_series)
+    z_nonuniformity = _compute_slice_nonuniformity(headers)
 
-    # Загружаем изображение и получаем геометрию через SimpleITK
-    reader.SetFileNames(dicom_series)
-    image = reader.Execute()
+    # Геометрию берём из заголовков первого и последнего среза (без загрузки пикселей всего объёма)
+    first, last = sitk.ImageFileReader(), sitk.ImageFileReader()
+    first.SetFileName(dicom_series[0])
+    first.ReadImageInformation()
+    last.SetFileName(dicom_series[-1])
+    last.ReadImageInformation()
 
-    img_size = image.GetSize()
-    img_spacing = image.GetSpacing()
-    img_origin = image.GetOrigin()
-    img_direction = image.GetDirection()
-    pixel_type = sitk.GetPixelIDValueAsString(image.GetPixelID())
+    n_slices = len(dicom_series)
+    if n_slices > 1:
+        z_spacing = np.linalg.norm(np.subtract(last.GetOrigin(), first.GetOrigin())) / (n_slices - 1)
+    else:
+        z_spacing = first.GetSpacing()[2]
 
+    img_size = (first.GetSize()[0], first.GetSize()[1], n_slices)
+    img_spacing = (first.GetSpacing()[0], first.GetSpacing()[1], float(z_spacing))
+    img_origin = first.GetOrigin()
+    img_direction = tuple(d + 0.0 for d in first.GetDirection())  # + 0.0 убирает -0.0
+    pixel_type = sitk.GetPixelIDValueAsString(first.GetPixelID())
+
+    # Колонки из запроса (порядок важен для таблицы), дальше - служебная геометрия
     return {
-        "PatientAge": age,
-        "PatientSex": sex,
+        "case_name": case_name,
+        "Origin": origin,
+        "Type": case_type,
         "Manufacturer": manufacturer,
         "Model": model,
+        "TubeVoltage_kV": tube_voltage,
+        "ImageSizeXY": f"{img_size[0]} x {img_size[1]}",
+        "NumberOfSlices": img_size[2],
+        "PixelSize_mm": f"{img_spacing[0]:.2f} x {img_spacing[1]:.2f}",
         "SliceThickness": slice_thickness,
+        "SliceSpacing_mm": round(img_spacing[2], 3),  # реальный шаг между срезами (по ImagePositionPatient)
+        "PatientAge": age,
+        "PatientSex": sex,
         "ImageSize": img_size,
         "ImageSpacing": img_spacing,
         "ImageOrigin": img_origin,
