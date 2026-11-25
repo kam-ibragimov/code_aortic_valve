@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -6,112 +7,136 @@ import numpy as np
 import pandas as pd
 
 from data_preprocessing.text_worker import add_info_logging
-from data_postprocessing.plotting_graphs import plot_table
-from data_preprocessing.oblique_slice_extractor import correct_br_points_to_plane
 
-from interobserver_study.slicer_txt_parser import parse_slicer_txt, get_case_number
-from interobserver_study.curve_metrics import open_curve_mpcd, closed_curve_mpcd
+from interobserver_study.boxplots import plot_geometry_boxplots
+from interobserver_study.case_ranking import build_case_ranking
+from interobserver_study.curve_metrics import point_to_curve_distance, symmetric_curve_distance
+from interobserver_study.sources import (CURVE_KEYS, LANDMARK_KEYS, build_columns, gt_structures,
+                                         load_sources)
+from interobserver_study.summary_table import build_summary, plot_summary
 
-LANDMARK_ORDER = ['R', 'L', 'N', 'RLC', 'RNC', 'LNC']
+NADIRS = ['R', 'L', 'N']
+COMMISSURES = ['RLC', 'RNC', 'LNC']
 GH_KEYS = ['RGH', 'LGH', 'NGH']
 CI_KEYS = ['RCI', 'LCI', 'NCI']
+DSC_KEY = 'AorticRoot'
 
-STRUCTURE_GROUPS = [
-    ('Landmarks', LANDMARK_ORDER),
-    ('Geometric Height (GH)', GH_KEYS),
-    ('Cusp Insertion (CI)', CI_KEYS),
-    ('Basal Ring (BR)', ['BR']),
-]
+# Two ways to measure curves:
+# (a) MPCD — GT points to the evaluated curve; (b) CCD — symmetric curve-to-curve distance.
+CURVE_MEASURES = {
+    'mpcd': ('MPCD', point_to_curve_distance),
+    'symmetric': ('CCD', symmetric_curve_distance),
+}
 
-
-def _landmark_errors(parsed, gt_case):
-    row = {}
-    for key in LANDMARK_ORDER:
-        if key in parsed and key in gt_case:
-            row[key] = float(np.linalg.norm(np.array(parsed[key]) - np.array(gt_case[key][0])))
-    return row
+OBSERVER_SET_DIRS = {'Inter-observer': '1_set_interobserver',
+                     'Intra-observer': '2_set_intraobserver'}
 
 
-def _curve_errors(parsed, gt_case, keys):
-    row = {}
-    for key in keys:
-        if key in parsed and key in gt_case:
-            row[key] = open_curve_mpcd(parsed[key], gt_case[key])
-    return row
+def _build_rows(curve_measure):
+    """Row order of the results table: (label, metric keys pooled in the row)."""
+    def group(name, keys):
+        return [(f'  {name}, all', keys)] + [(f'    {key}', [key]) for key in keys]
+
+    return ([('Aortic root (DSC)', [DSC_KEY])]
+            + [('Landmarks, all (PPD, mm)', NADIRS + COMMISSURES)]
+            + group('Nadirs', NADIRS) + group('Commissures', COMMISSURES)
+            + [(f'Curves, all ({curve_measure}, mm)', ['BR'] + GH_KEYS + CI_KEYS), ('  BR', ['BR'])]
+            + group('GH', GH_KEYS) + group('CI', CI_KEYS))
 
 
-def _br_error(parsed, gt_case):
-    if 'BR' not in parsed or 'BR - closed' not in gt_case:
-        return None
-    r, l, n = parsed.get('R'), parsed.get('L'), parsed.get('N')
-    br_points = parsed['BR']
-    if r is not None and l is not None and n is not None:
-        _, _, br_points = correct_br_points_to_plane(br_points, r=r, l=l, n=n)
-    return closed_curve_mpcd(br_points, gt_case['BR - closed'])
+def _latest_result_folder(result_folder, ds_folder_name, file_name):
+    """Latest result/<ds_folder_name>_dd_mm_yy folder holding file_name. Folders with any other
+    suffix (manual copies, experiments) are ignored."""
+    pattern = re.compile(rf'^{re.escape(ds_folder_name)}_(\d{{2}}_\d{{2}}_\d{{2}})$')
+    candidates = []
+    for folder in Path(result_folder).iterdir():
+        match = pattern.match(folder.name)
+        if folder.is_dir() and match and (folder / file_name).is_file():
+            candidates.append((datetime.strptime(match.group(1), '%d_%m_%y'), folder))
+    return max(candidates)[1] if candidates else None
 
 
-def _process_set(set_folder, dict_all_case, has_br):
+def _dsc_rows(result_folder, aorta_segment_ds_name, dl_cases):
+    folder = _latest_result_folder(result_folder, aorta_segment_ds_name, 'per_case_metrics.csv')
+    if folder is None:
+        add_info_logging(f'No per_case_metrics.csv for {aorta_segment_ds_name}: DSC will be N/A.',
+                         'result_logger')
+        return []
+    df = pd.read_csv(folder / 'per_case_metrics.csv')
+    add_info_logging(f'Interobserver structures: DSC taken from {folder.name}', 'result_logger')
+    df = df[df['case'].isin(dl_cases)]
+    return [{'case': case, 'source': 'DL', 'metric': DSC_KEY, 'measure': measure, 'value': value}
+            for measure, column in (('DSC', 'Dice'), ('HD', 'HD'))
+            for case, value in zip(df['case'], df[column])]
+
+
+def _case_rows(source, case_name, structures, gt):
     rows = []
 
-    for txt_path in sorted(Path(set_folder).glob('*.txt')):
-        num = get_case_number(txt_path.name)
-        if num is None:
-            continue
-        case_name = f'n{num}'
-        gt_case = dict_all_case.get(case_name)
-        if gt_case is None:
-            add_info_logging(f'{set_folder}: {case_name} not found in dict_all_case, skipping.',
-                             'work_logger')
-            continue
+    def add(metric, measure, value):
+        rows.append({'case': case_name, 'source': source, 'metric': metric,
+                     'measure': measure, 'value': value})
 
-        parsed = parse_slicer_txt(txt_path)
-
-        row = {'case': case_name}
-        row.update(_landmark_errors(parsed, gt_case))
-        row.update(_curve_errors(parsed, gt_case, GH_KEYS))
-        row.update(_curve_errors(parsed, gt_case, CI_KEYS))
-        if has_br:
-            br_mpcd = _br_error(parsed, gt_case)
-            if br_mpcd is not None:
-                row['BR'] = br_mpcd
-
-        rows.append(row)
-
-    return pd.DataFrame(rows)
+    for key in LANDMARK_KEYS:
+        if key in structures and key in gt:
+            add(key, 'PPD', float(np.linalg.norm(structures[key] - gt[key])))
+    for key in CURVE_KEYS + ['BR']:
+        if key in structures and key in gt:
+            for measure, distance in CURVE_MEASURES.values():
+                add(key, measure, distance(gt[key], structures[key], closed=(key == 'BR')))
+    return rows
 
 
-def _build_summary_table(df):
-    data_table = []
-    for label, keys in STRUCTURE_GROUPS:
-        present_keys = [key for key in keys if key in df.columns]
-        pooled = df[present_keys].to_numpy().ravel() if present_keys else np.array([])
-        pooled = pooled[~pd.isna(pooled)]
-        n_cases = int(df[present_keys].notna().any(axis=1).sum()) if present_keys else 0
-        if len(pooled):
-            data_table.append([label, round(float(pooled.mean()), 2), round(float(pooled.std()), 2), n_cases])
-        else:
-            data_table.append([label, '—', '—', 0])
-    return data_table
+def _save_observer_set_csv(per_case, base_folder, source, set_dirname):
+    """Per-set wide CSV (one row per case), as before: point distances and MPCD of the curves."""
+    subset = per_case[(per_case['source'] == source) & per_case['measure'].isin(['PPD', 'MPCD'])]
+    wide = subset.pivot(index='case', columns='metric', values='value')
+    wide = wide.reindex(columns=[key for key in LANDMARK_KEYS + GH_KEYS + CI_KEYS + ['BR']
+                                 if key in wide.columns]).reset_index()
+    set_folder = os.path.join(base_folder, set_dirname)
+    os.makedirs(set_folder, exist_ok=True)
+    wide.to_csv(os.path.join(set_folder, f'{set_dirname}.csv'), index=False)
 
 
-def process_interobserver_comparison(result_folder, dict_all_case, interobserver_txt_points_folder):
+def process_interobserver_comparison(result_folder, dict_all_case, interobserver_txt_points_folder,
+                                     aorta_segment_ds_name, include_overlap_columns=False,
+                                     include_median_column=True):
+    """Structural accuracy of the network and both observers against GT: DSC of the aortic root
+    (network only), point distances of the landmarks and two curve distances (two tables).
+    include_overlap_columns: add the columns limited to cases shared by the network and both
+    observers; few cases, for a look only.
+    include_median_column: add a median [Q1–Q3] column of all network cases before the mean."""
     date_str = datetime.now().strftime('%d_%m_%y')
     base_folder = os.path.join(result_folder, f'Interobserver_study_{date_str}')
+    os.makedirs(base_folder, exist_ok=True)
 
-    set_configs = [
-        (os.path.join(interobserver_txt_points_folder, '1 set'), '1_set_interobserver', False),
-        (os.path.join(interobserver_txt_points_folder, '2 set'), '2_set_intraobserver', True),
-    ]
+    sources = load_sources(dict_all_case, interobserver_txt_points_folder)
 
-    for set_folder, set_dirname, has_br in set_configs:
-        df = _process_set(set_folder, dict_all_case, has_br)
-        set_base = os.path.join(base_folder, set_dirname)
-        os.makedirs(set_base, exist_ok=True)
+    rows = _dsc_rows(result_folder, aorta_segment_ds_name, set(sources['DL']))
+    for source, cases in sources.items():
+        for case_name, structures in sorted(cases.items()):
+            rows.extend(_case_rows(source, case_name, structures,
+                                   gt_structures(dict_all_case[case_name])))
+    per_case = pd.DataFrame(rows)
+    per_case.to_csv(os.path.join(base_folder, 'structures_per_case.csv'), index=False)
 
-        df.to_csv(os.path.join(set_base, f'{set_dirname}.csv'), index=False)
+    for source, set_dirname in OBSERVER_SET_DIRS.items():
+        _save_observer_set_csv(per_case, base_folder, source, set_dirname)
 
-        data_table = _build_summary_table(df)
-        columns = ['Structure', 'Mean, mm', 'Std, mm', 'N cases']
-        plot_table(data_table, columns, os.path.join(set_base, f'{set_dirname}.png'))
+    plot_geometry_boxplots(per_case, os.path.join(base_folder, 'boxplots_geometry.png'),
+                           landmark_keys=LANDMARK_KEYS,
+                           curve_groups=[('GH', GH_KEYS), ('CI', CI_KEYS), ('BR', ['BR'])],
+                           dsc_key=DSC_KEY)
+    build_case_ranking(per_case).to_csv(os.path.join(base_folder, 'cases_quality_ranking.csv'),
+                                        index=False)
 
-    add_info_logging('Interobserver curve/landmark comparison completed', 'result_logger')
+    columns, overlap = build_columns(sources, include_overlap_columns, include_median_column)
+    for suffix, (measure, _) in CURVE_MEASURES.items():
+        subset = per_case[per_case['measure'].isin(['DSC', 'PPD', measure])]
+        summary = build_summary(subset, _build_rows(measure), columns, value_col='value')
+        summary.to_csv(os.path.join(base_folder, f'structures_summary_{suffix}.csv'), index=False,
+                       encoding='utf-8-sig')
+        plot_summary(summary, os.path.join(base_folder, f'structures_summary_{suffix}.png'))
+
+    add_info_logging(f'Interobserver structures completed: {len(sources["DL"])} DL cases, '
+                     f'{len(overlap)} cases shared with observers.', 'result_logger')

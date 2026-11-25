@@ -8,7 +8,7 @@ def main(data_path):
     output_folder = os.path.join(data_path, "result", "cases_visualization")
     original_img_folder = os.path.join(data_path, "image_nii")
     original_aorta_mask_folder = os.path.join(data_path, "mask_aorta_segment")
-    pred_aorta_mask_folder = os.path.join(data_path,  "nnUNet_folder", "nnUNet_test", "Dataset421_AortaSegment")
+    pred_aorta_mask_folder = os.path.join(data_path,  "nnUNet_folder", "nnUNet_test", "Dataset421_AortaSegment_consolidated")
     gh_lines_pred_mask_folder = os.path.join(data_path, "nnUNet_folder", "nnUNet_test", "Dataset424_GhLines")
     ci_lines_pred_mask_folder = os.path.join(data_path, "nnUNet_folder", "nnUNet_test", "Dataset425_CiLines")
     br_2d_pred_mask_folder = os.path.join(data_path, "nnUNet_folder", "nnUNet_test", "Dataset426_2DBasalRing")

@@ -22,6 +22,7 @@ from data_preprocessing.crop_nii import cropped_image, find_global_size, crop_co
 from data_postprocessing.controller_analysis import (landmarks_analysis, experiment_analysis, mask_analysis,
                                                      find_morphometric_parameters, LandmarkCentersCalculator,
                                                      curve_lines_analysis, basal_ring_analysis)
+from data_postprocessing.mask_consolidation import consolidate_aorta_masks
 from data_postprocessing.coherent_point_drift import create_new_gh_json, find_new_curv
 from data_visualization.markers import (slices_with_markers, process_markers, find_mean_gh_landmark,
                                         process_mask_curve_lines)
@@ -30,6 +31,7 @@ from experiments.nnUnet_experiments import experiment_training
 from models.controller_GNN import process_gnn, process_gnn_post_analysis
 from data_preprocessing.oblique_slice_extractor import find_global_2d_size, extract_2d_slice_pair, process_br_plane_corrections
 from interobserver_study.controller_interobserver import process_interobserver_comparison
+from interobserver_study.controller_morphometry import process_interobserver_morphometry
 
 # from optimization.parallelization import division_processes
 
@@ -276,9 +278,9 @@ def controller(data_path, cpus):
                                   dict_all_case[used_case_name]['RNC'][0],
                                   dict_all_case[used_case_name]['LNC'][0]]
             convert_and_cut_stl(stl_path, image_path, mask_aorta_segment_path,
-                                nadir_points, commissural_points, margin=2)
-            controller_dump["mask_aorta_segment"] = True
-            yaml_save(controller_dump, controller_path)
+                                nadir_points, commissural_points)
+        controller_dump["mask_aorta_segment"] = True
+        yaml_save(controller_dump, controller_path)
 
     if not controller_dump.get("nnUNet_aorta_segment_train"):
         dict_dataset = {
@@ -754,6 +756,26 @@ def controller(data_path, cpus):
         controller_dump["analys_result_6_landmarks"] = True
         yaml_save(controller_dump, controller_path)
 
+    if not controller_dump.get("consolidate_aorta_mask"):
+        # Обрезка масок аорты плоскостями через предсказанные ориентиры (*_pred в dict_all_case)
+        # и такой же анализ, как для исходных масок сети. Исходные маски не меняются.
+        num = controller_dump["number_aorta_segment"]
+        name = controller_dump["name_aorta_segment"]
+        ds_folder_name = f"Dataset{num}_{name}"
+        consolidated_name = f"{ds_folder_name}_consolidated"
+        consolidated_folder = os.path.join(nnUNet_folder, "nnUNet_test", consolidated_name)
+        clear_folder(consolidated_folder)
+        report = consolidate_aorta_masks(
+            source_folder=os.path.join(nnUNet_folder, "nnUNet_test", ds_folder_name),
+            output_folder=consolidated_folder,
+            dict_all_case=dict_all_case)
+        analysis_folder = mask_analysis(data_path, result_folder, type_mask="aortic_valve",
+                                        folder_name=ds_folder_name,
+                                        pred_folder_name=consolidated_name, use_cache=False)
+        write_csv(pd.DataFrame(report), analysis_folder, f"{consolidated_name}_report.csv")
+        controller_dump["consolidate_aorta_mask"] = True
+        yaml_save(controller_dump, controller_path)
+
     if not controller_dump.get("analys_experiment_result_6_landmarks"):
         num = controller_dump["number_6_landmarks"]
         name = controller_dump["name_6_landmarks"]
@@ -828,8 +850,19 @@ def controller(data_path, cpus):
         yaml_save(controller_dump, controller_path)
 
     if not controller_dump.get("interobserver_curve_comparison"):
-        process_interobserver_comparison(result_folder, dict_all_case, interobserver_txt_points_folder)
+        num = controller_dump["number_aorta_segment"]
+        name = controller_dump["name_aorta_segment"]
+        process_interobserver_comparison(result_folder, dict_all_case, interobserver_txt_points_folder,
+                                         aorta_segment_ds_name=f"Dataset{num}_{name}_consolidated",
+                                         include_overlap_columns=False,
+                                         include_median_column=True)
         controller_dump["interobserver_curve_comparison"] = True
+        yaml_save(controller_dump, controller_path)
+
+    if not controller_dump.get("interobserver_morphometry"):
+        process_interobserver_morphometry(result_folder, dict_all_case, interobserver_txt_points_folder,
+                                          include_overlap_columns=True)
+        controller_dump["interobserver_morphometry"] = True
         yaml_save(controller_dump, controller_path)
 
     if not controller_dump.get("calc_morphometric"):

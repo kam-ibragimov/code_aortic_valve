@@ -429,9 +429,14 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases,
     return predictions
 
 
-def mask_analysis(data_path, result_path, type_mask, folder_name):
+def mask_analysis(data_path, result_path, type_mask, folder_name, pred_folder_name=None, use_cache=True):
+    """pred_folder_name: папка предсказаний в nnUNet_test, если она отличается от folder_name (GT
+    всегда берётся из original_mask/folder_name); результаты пишутся в папку с её именем.
+    use_cache=False: пересчитать метрики, даже если CSV за сегодня уже есть.
+    Возвращает путь к папке результатов."""
+    pred_folder_name = pred_folder_name or folder_name
     date_str = datetime.now().strftime("%d_%m_%y")
-    result_folder_path = os.path.join(result_path, f"{folder_name}_{date_str}")
+    result_folder_path = os.path.join(result_path, f"{pred_folder_name}_{date_str}")
     os.makedirs(result_folder_path, exist_ok=True)
     per_case_csv = os.path.join(str(result_folder_path), "per_case_metrics.csv")
 
@@ -443,13 +448,14 @@ def mask_analysis(data_path, result_path, type_mask, folder_name):
     }
     metrics = ["Dice", "IoU", "HD", "ASSD"]
 
-    if os.path.exists(per_case_csv):
+    if use_cache and os.path.exists(per_case_csv):
         # Загружаем данные из файлов
         add_info_logging("Using cached metrics from CSV files", "work_logger")
         df = pd.read_csv(per_case_csv)
     else:
         # Пересчитываем метрики
-        per_case_data = mask_comparison(data_path, type_mask=type_mask, folder_name=folder_name)
+        per_case_data = mask_comparison(data_path, type_mask=type_mask, folder_name=folder_name,
+                                        pred_folder_name=pred_folder_name)
 
         # Сохраняем метрики по кейсам
         df = pd.DataFrame(per_case_data)
@@ -477,10 +483,11 @@ def mask_analysis(data_path, result_path, type_mask, folder_name):
         row.append(int(len(sub_df)))
         data_table.append(row)
     columns = ["Type"] + [f"{metric_name}\nmean ± std" for metric_name in metrics] + ["Number of\nimages"]
-    results_table_path = os.path.join(result_folder_path, f"aorta_segment_metrics_{folder_name}.png")
+    results_table_path = os.path.join(result_folder_path, f"aorta_segment_metrics_{pred_folder_name}.png")
     plot_table(data_table, columns, results_table_path)
 
     add_info_logging("Analysis completed", "work_logger")
+    return result_folder_path
 
 
 def experiment_analysis(data_path,

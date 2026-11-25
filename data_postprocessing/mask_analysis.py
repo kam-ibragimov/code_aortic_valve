@@ -232,12 +232,13 @@ def keep_largest_component(mask_path):
     return removed
 
 
-def mask_comparison(data_path, type_mask, folder_name):
+def mask_comparison(data_path, type_mask, folder_name, pred_folder_name=None):
+    # pred_folder_name: папка предсказаний в nnUNet_test, если она отличается от folder_name
     # Lazy import: not part of the core install (see requirements-full.txt)
     import nibabel as nib
     from data_postprocessing.evaluation_analysis import  evaluate_segmentation
     nnUNet_folder = os.path.join(data_path, "nnUNet_folder")
-    result_mask_folder = os.path.join(nnUNet_folder, "nnUNet_test", folder_name)
+    result_mask_folder = os.path.join(nnUNet_folder, "nnUNet_test", pred_folder_name or folder_name)
     original_mask_folder = os.path.join(nnUNet_folder, "original_mask", folder_name)
 
     per_case_data = []
@@ -288,12 +289,14 @@ class LandmarkCentersCalculator:
     @staticmethod
     def _compute_center_of_mass(binary_mask, spacing, origin, direction):
         # Function to compute center of mass in world coordinates
+        # Воксели взвешены своими значениями: вероятности для npz, единицы для бинарной маски
         indices = np.argwhere(binary_mask)  # Get voxel indices of the mask
         if len(indices) == 0:
             return None  # No center of mass if mask is empty
 
         # Compute the mean position in voxel space
-        center_voxel = np.mean(indices, axis=0)[::-1]  # Reverse order (Z, Y, X) -> (X, Y, Z)
+        weights = np.asarray(binary_mask, dtype=np.float64)[tuple(indices.T)]
+        center_voxel = np.average(indices, axis=0, weights=weights)[::-1]  # (Z, Y, X) -> (X, Y, Z)
 
         # Convert to world coordinates using the corrected direction matrix
         center_world = np.dot(direction, center_voxel * spacing) + origin

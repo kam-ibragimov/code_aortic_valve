@@ -8,6 +8,7 @@ analys_result_gh_lines: true
 br_plane_offset: true
 calc_morphometric: true
 check_metadata_dicom: true
+consolidate_aorta_mask: true
 convert_resample_dicom: true
 create_dict_all_case: true
 create_new_train_test_lists: true
@@ -31,6 +32,7 @@ find_geometric_heights: true
 gnn_metrics_post_analysis: true
 gnn_metrics_train_test: true
 interobserver_curve_comparison: true
+interobserver_morphometry: true
 json_landmarks_mask_coord: true
 mask_6_landmarks: true
 mask_aorta_segment: true
