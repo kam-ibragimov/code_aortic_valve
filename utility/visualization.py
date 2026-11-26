@@ -5,7 +5,6 @@ import SimpleITK as sitk
 import json
 import numpy as np
 import pyvista as pv
-from Demos.mmapfile_demo import offset
 from scipy.spatial.transform import Rotation as R
 
 

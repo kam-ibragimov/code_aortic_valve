@@ -6,6 +6,7 @@ pandas
 openpyxl
 matplotlib
 scikit-learn
+nnunetv2
 totalsegmentator
 trimesh
 rtree
