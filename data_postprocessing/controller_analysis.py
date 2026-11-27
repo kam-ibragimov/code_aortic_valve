@@ -19,6 +19,7 @@ from data_postprocessing.curve_utils import (resample_curve, sample_closed_curve
                                              mean_point_to_curve_distance, point_to_curve_distances,
                                              load_labels_mask_sitk, vtk_to_numpy, apply_bezier_anchor)
 from data_preprocessing.text_worker import add_info_logging
+from data_preprocessing.oblique_slice_extractor import extract_3d_mask_section
 from models.controller_nnUnet import process_nnunet
 from data_postprocessing.metrics_config import metric_to_landmarks
 from data_postprocessing.geometric_metrics import controller_metrics
@@ -302,13 +303,38 @@ def _detect_plane_offset(distances, cv_threshold=0.20, min_mean_mm=0.5):
     return float(np.std(distances)) / mean_d < cv_threshold
 
 
+def _br_section_masks(mask_folder, dict_cases, size_hw):
+    """(case_name, 2D-маска BR) для каждого кейса папки mask_folder.
+    size_hw=None: папка содержит 2D-предсказания сети, файлы читаются как есть.
+    size_hw задан: папка содержит 3D-маски корня, BR — их сечение плоскостью R/L/N_pred."""
+    for file_path in sorted(Path(mask_folder).glob("*.nii.gz")):
+        case_name = file_path.name[:-7]
+        if size_hw is None:
+            yield case_name, sitk.ReadImage(str(file_path))
+            continue
+        points = dict_cases.get(case_name, {})
+        if not all(k in points for k in ("R_pred", "L_pred", "N_pred")):
+            add_info_logging(f"BR from 3D mask section: no R/L/N_pred for case {case_name} "
+                             f"(run analys_result_6_landmarks first).", "work_logger")
+            continue
+        yield case_name, extract_3d_mask_section(file_path, points["R_pred"], points["L_pred"],
+                                                 points["N_pred"], size_hw)
+
+
 def basal_ring_analysis(data_path, result_path, folder_name, dict_cases,
-                        plane_offset_mode="none", n_curve_points=None):
+                        plane_offset_mode="none", n_curve_points=None, section_size_hw=None,
+                        use_cache=True):
     # plane_offset_mode: "none"   — все смещения False
     #                    "detect" — статистическое вычисление _detect_plane_offset
     #                    "key"    — читать "BR - plane offset" из dict_cases
+    # folder_name: папка предсказаний в nnUNet_test. section_size_hw=None — это 2D-маски BR
+    # от 2D-сети; если задан — это 3D-маски корня, BR берётся их сечением плоскостью
+    # R/L/N_pred на холсте этого размера.
+    # use_cache=False: пересчитать, даже если CSV и br_predictions.json за сегодня уже есть
+    # (иначе после смены метода или кода в тот же день подхватятся старые точки BR_pred).
     date_str = datetime.now().strftime("%d_%m_%y")
-    result_folder_path = os.path.join(result_path, f"{folder_name}_{date_str}")
+    result_name = folder_name if section_size_hw is None else f"{folder_name}_BR_section"
+    result_folder_path = os.path.join(result_path, f"{result_name}_{date_str}")
     os.makedirs(result_folder_path, exist_ok=True)
 
     nnUNet_folder = os.path.join(data_path, "nnUNet_folder")
@@ -325,7 +351,7 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases,
         "n": "Slo. norm."
     }
 
-    needs_recompute = not os.path.exists(per_case_csv)
+    needs_recompute = not use_cache or not os.path.exists(per_case_csv)
     if not needs_recompute:
         df = pd.read_csv(per_case_csv)
         if "plane_offset" not in df.columns:
@@ -335,20 +361,20 @@ def basal_ring_analysis(data_path, result_path, folder_name, dict_cases,
 
     if needs_recompute:
         per_case_data = []
-        files = list(Path(result_mask_folder).glob("*.nii.gz"))
-
-        for file_path in files:
-            case_name = file_path.name[:-7]
+        for case_name, mask_sitk in _br_section_masks(result_mask_folder, dict_cases,
+                                                      section_size_hw):
             first_char = case_name[0]
 
             if case_name not in dict_cases or "BR - closed" not in dict_cases[case_name]:
                 add_info_logging(f"Missing BR - closed for case: {case_name}", "work_logger")
                 continue
 
-            mask_sitk = sitk.ReadImage(str(file_path))
             mask_array = sitk.GetArrayFromImage(mask_sitk)
 
-            pred_boundary = extract_boundary_curve_world(mask_array, mask_sitk)
+            # Сечение 3D-маски — дробная картинка после линейной интерполяции: контур по ней без
+            # бинаризации (см. extract_3d_mask_section)
+            pred_boundary = extract_boundary_curve_world(mask_array, mask_sitk,
+                                                         binarize=section_size_hw is None)
             if len(pred_boundary) < 2:
                 add_info_logging(f"Empty predicted boundary for case: {case_name}", "work_logger")
                 continue

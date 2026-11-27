@@ -154,10 +154,13 @@ def extract_centerline_from_heatmap(
     return coords
 
 
-def extract_boundary_curve_world(mask_array, mask_sitk):
+def extract_boundary_curve_world(mask_array, mask_sitk, binarize=True):
     """
     Extracts a face-connected closed boundary contour from an oblique 2D mask
     stored as a single-slice 3D nii.gz (one dimension == 1, any axis).
+    binarize=True: a label mask, foreground is everything > 0.
+    binarize=False: a mask resampled with linear interpolation (values 0..1); the 0.5 iso-line
+    is taken directly, which keeps the sub-pixel position of the boundary.
     Returns np.ndarray of shape (N, 3) in world coordinates (mm).
     """
     from skimage.measure import find_contours
@@ -171,7 +174,8 @@ def extract_boundary_curve_world(mask_array, mask_sitk):
     thin_numpy = int(np.argmin(mask_array.shape))
     plane_numpy = [i for i in range(3) if i != thin_numpy]
 
-    slice_2d = (np.squeeze(mask_array, axis=thin_numpy) > 0).astype(np.uint8)
+    slice_2d = np.squeeze(mask_array, axis=thin_numpy)
+    slice_2d = (slice_2d > 0).astype(np.uint8) if binarize else slice_2d.astype(float)
     contours = find_contours(slice_2d, level=0.5)
     if not contours:
         return np.empty((0, 3))

@@ -387,7 +387,12 @@ def controller(data_path, cpus):
         controller_dump["br_plane_offset"] = True
         yaml_save(controller_dump, controller_path)
 
-    if not controller_dump.get("nnUNet_br_2d_train"):
+    # Способ поиска BR, задаётся только вручную в controller.yaml (код его не меняет):
+    # true  — отдельная 2D-сеть на срезе КТ в плоскости надиров (шаги nnUNet_br_2d_*);
+    # false — сечение предсказанной 3D-маски корня плоскостью R/L/N_pred, 2D-сеть не нужна.
+    br_method_2d_network = controller_dump.get("br_method_2d_network", True)
+
+    if br_method_2d_network and not controller_dump.get("nnUNet_br_2d_train"):
         dict_dataset = {
             "channel_names": {0: "CT"},
             "labels": {'background': 0, 'aortic_valve': 1},
@@ -403,11 +408,18 @@ def controller(data_path, cpus):
         yaml_save(controller_dump, controller_path)
 
     if not controller_dump.get("analys_result_br_2d"):
-        num = controller_dump["number_br_2d"]
-        name = controller_dump["name_br_2d"]
+        if br_method_2d_network:
+            num, name, section_size_hw = (controller_dump["number_br_2d"],
+                                          controller_dump["name_br_2d"], None)
+        else:
+            # Нужны R/L/N_pred в dict_all_case (шаг analys_result_6_landmarks)
+            num, name, section_size_hw = (controller_dump["number_aorta_segment"],
+                                          controller_dump["name_aorta_segment"],
+                                          controller_dump["crop_br_2d_size"])
         predictions = basal_ring_analysis(data_path, result_folder, folder_name=f"Dataset{num}_{name}",
                                           dict_cases=dict_all_case, plane_offset_mode="none",
-                                          n_curve_points=20)
+                                          n_curve_points=20, section_size_hw=section_size_hw,
+                                          use_cache=False)
         if predictions:
             for case_name, pred_coords in predictions.items():
                 if case_name in dict_all_case:
@@ -416,7 +428,7 @@ def controller(data_path, cpus):
         controller_dump["analys_result_br_2d"] = True
         yaml_save(controller_dump, controller_path)
 
-    if not controller_dump.get("nnUNet_br_2d_pred_plane"):
+    if br_method_2d_network and not controller_dump.get("nnUNet_br_2d_pred_plane"):
         num = controller_dump["number_br_2d"]
         name = controller_dump["name_br_2d"]
         ds_folder_name = f"Dataset{num}_{name}"

@@ -5,6 +5,7 @@ analys_result_br_2d: true
 analys_result_ci_lines: true
 analys_result_gh_landmark: true
 analys_result_gh_lines: true
+br_method_2d_network: false
 br_plane_offset: true
 calc_morphometric: true
 check_metadata_dicom: true

@@ -178,6 +178,28 @@ def extract_2d_slice_pair(image_3d_path, image_2d_path,
         sitk.WriteImage(mask_resampler.Execute(mask), str(mask_2d_path))
 
 
+def extract_3d_mask_section(mask_3d_path, r, l, n, size_hw):
+    """
+    Сечение 3D-маски корня аорты плоскостью надиров R/L/N на том же холсте, что и 2D-срезы
+    extract_2d_slice_pair. Альтернатива 2D-сети для поиска BR: контур сечения и есть кольцо.
+
+    Маска интерполируется линейно, а не nearest neighbour: плоскость наклонна к сетке вокселей,
+    и nearest neighbour дал бы на границе нерегулярную «лесенку». Пиксели у границы получают
+    дробные значения 0..1, и изолиния 0.5 проходит по границе маски с субпиксельной точностью.
+    Поэтому результат нельзя бинаризовать до поиска контура (extract_boundary_curve_world,
+    binarize=False).
+    Возвращает float-картинку [W, H, 1] как sitk.Image с геометрией плоскости.
+    """
+    mask = sitk.Cast(sitk.ReadImage(str(mask_3d_path)), sitk.sitkFloat32)
+    centroid, x_axis, y_axis, normal = get_oblique_plane_params(r, l, n)
+    resampler = _build_resampler(
+        centroid, x_axis, y_axis, normal,
+        mask.GetSpacing()[0], size_hw, fill_value=0,
+        interpolator=sitk.sitkLinear
+    )
+    return resampler.Execute(mask)
+
+
 def compute_br_plane_offset(br_points, r, l, n, t_threshold=2.5, min_offset_mm=0.3):
     """
     Computes the signed offset of 'BR - closed' points from the oblique plane R/L/N.
